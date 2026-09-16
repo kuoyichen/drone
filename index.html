@@ -49,9 +49,13 @@
   .center-actions{position:absolute;left:37%;right:37%;top:52%;display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .center-actions button{padding:10px 6px;border-radius:10px;border:1px solid #c8e9ff;background:#143e66;color:white;font-weight:800;cursor:pointer}
   .center-actions .unlock{background:#185b46}.center-actions .estop{background:#7b2031}
-  .trim-pad{position:absolute;left:4%;bottom:7%;width:190px;height:160px}
-  .trim-pad .control-btn{width:44px;height:44px;font-size:17px}.trim-up{left:73px;top:0}.trim-down{left:73px;bottom:0}.trim-left{left:0;top:58px}.trim-right{right:0;top:58px}
-  .trim-pad .center-mark{position:absolute;left:70px;top:55px;width:50px;height:50px;border-radius:14px;border:2px solid #b7e5ff88;display:grid;place-items:center;color:#dff5ff;font-size:10px;background:#0b4c83}
+  .trim-pad{position:absolute;left:50%;bottom:8%;transform:translateX(-50%);width:126px;height:112px;z-index:2}
+  .trim-pad .control-btn{width:36px;height:36px;font-size:15px}
+  .trim-up{left:45px;top:0}
+  .trim-down{left:45px;bottom:0}
+  .trim-left{left:0;top:38px}
+  .trim-right{right:0;top:38px}
+  .trim-pad .center-mark{position:absolute;left:43px;top:35px;width:40px;height:40px;border-radius:12px;border:2px solid #b7e5ff88;display:grid;place-items:center;color:#dff5ff;font-size:9px;background:#0b4c83;line-height:1.05;padding-top:1px}
   .power-area{position:absolute;right:4%;bottom:8%;width:160px;text-align:center}.power-area button{width:80px;height:48px;border-radius:24px;border:2px solid #d7f0ff;background:#173c61;color:white;font-weight:800;cursor:pointer}.power-area small{display:block;margin-top:7px;color:#d8efff}
   .side{padding:14px;display:flex;flex-direction:column;gap:12px}
   .section-title{font-weight:800;margin-bottom:8px}.muted{color:var(--muted)}
