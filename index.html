@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>micro:bit × nRF24L01 無人機 Web Serial 遙控器</title>
+<title>micro:bit × nRF24L01 無人機 Web Bluetooth 遙控器 / Ground Station</title>
 <style>
   :root{
     --bg:#07111f; --panel:#0d1c30; --panel2:#132843; --line:#284d72;
@@ -33,7 +33,10 @@
   .control-btn{position:absolute;width:64px;height:64px;border-radius:50%;border:3px solid #d6edff;background:radial-gradient(circle at 35% 30%,#3f7bad,#153d68 65%,#0a2745);box-shadow:0 6px 16px #00162d, inset 0 0 0 4px #0c3157;color:white;font-weight:800;cursor:pointer;user-select:none;touch-action:none}
   .control-btn.active{box-shadow:0 0 0 5px #7dd3fc44,0 0 25px #67e8f9,inset 0 0 0 4px #0c3157;background:radial-gradient(circle at 35% 30%,#47b5d8,#12618d 65%,#0a3551)}
   .control-btn.small{width:48px;height:48px;font-size:12px}
-  .control-btn.pair{border-radius:16px;width:68px;height:48px}
+  .control-btn.pair{border-radius:16px;width:76px;height:48px;font-size:12px;transition:background .18s,border-color .18s,box-shadow .18s,opacity .18s}
+  .control-btn.pair.pairing{background:radial-gradient(circle at 35% 30%,#c99a2e,#74550e 70%);border-color:#ffe08a;box-shadow:0 0 18px #fbbf2466,inset 0 0 0 3px #6b4d0b;cursor:not-allowed}
+  .control-btn.pair.paired{background:radial-gradient(circle at 35% 30%,#42c98b,#126846 70%);border-color:#baf7dc;box-shadow:0 0 18px #34d39966,inset 0 0 0 3px #0c5538}
+  .control-btn.pair.failed{background:radial-gradient(circle at 35% 30%,#d85c71,#7b2031 70%);border-color:#ffd0d8;box-shadow:0 0 18px #fb718566,inset 0 0 0 3px #681827}
   .aux2{left:8.5%;top:6%}.aux3{left:31%;top:7%}.aux1{right:30.5%;top:7%}.pair{right:8.8%;top:7%}
   .aux4{left:8.5%;top:37%}.aux5{right:8.5%;top:37%}
   .pcb-label.aux2l{left:5.7%;top:1%}.pcb-label.aux3l{left:28.5%;top:1%}.pcb-label.aux1l{right:27.5%;top:1%}.pcb-label.pairl{right:6.8%;top:1%}
@@ -44,11 +47,11 @@
   .left-stick{left:13%;top:34%}.right-stick{right:13%;top:34%}
   .stick-label{position:absolute;width:210px;text-align:center;font-weight:700;color:#d8efff;top:calc(34% + 215px);font-size:13px}
   .stick-label.left{left:13%}.stick-label.right{right:13%}
-  .center-screen{position:absolute;left:39%;right:39%;top:29%;height:110px;border:4px solid #6abef5;border-radius:12px;background:#03182a;box-shadow:inset 0 0 25px #000;color:#7ee7ff;padding:9px;font:12px/1.45 ui-monospace,Consolas,monospace;overflow:hidden}
+  .center-screen{position:absolute;left:39%;right:39%;top:29%;height:110px;border:4px solid #6abef5;border-radius:12px;background:#03182a;box-shadow:inset 0 0 25px #000;color:#7ee7ff;padding:7px 9px;font:11px/1.28 ui-monospace,Consolas,monospace;overflow:hidden}
   .center-screen b{color:white;font-family:inherit}
   .center-actions{position:absolute;left:37%;right:37%;top:52%;display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .center-actions button{padding:10px 6px;border-radius:10px;border:1px solid #c8e9ff;background:#143e66;color:white;font-weight:800;cursor:pointer}
-  .center-actions .unlock{background:#185b46}.center-actions .estop{background:#7b2031}
+  .center-actions .unlock{background:#185b46;border-color:#4bbf91}.center-actions .unlock.unlocking{background:#8a6a18;border-color:#d8ac37;cursor:not-allowed;opacity:.9}.center-actions .unlock.resetting{background:#475569;border-color:#94a3b8;cursor:not-allowed;opacity:.95}.center-actions .unlock.armed{background:#8b1f32;border-color:#e85f75;cursor:not-allowed}.center-actions .unlock:disabled{filter:none}.center-actions .estop{background:#7b2031}
   .trim-pad{position:absolute;left:50%;bottom:8%;transform:translateX(-50%);width:126px;height:112px;z-index:2}
   .trim-pad .control-btn{width:36px;height:36px;font-size:15px}
   .trim-up{left:45px;top:0}
@@ -62,6 +65,33 @@
   .values{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.value{background:#081726;border:1px solid #244765;border-radius:9px;padding:8px 10px;display:flex;justify-content:space-between;gap:8px;font:12px ui-monospace,Consolas,monospace}.value b{color:#bdeaff}
   .switch-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #23415c}.switch-row:last-child{border-bottom:0}
   .mini-toggle{border:1px solid #376485;background:#102d49;color:white;border-radius:999px;padding:5px 9px;cursor:pointer;font-size:12px}.mini-toggle.on{background:#155a46;border-color:#2e8c70}
+  .telemetry-card{margin-top:16px;padding:14px}
+  .telemetry-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .telemetry-head .section-title{margin:0 auto 0 0}
+  .sub-options{display:flex;gap:8px;flex-wrap:wrap}
+  .sub-chip{display:flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #315b7e;border-radius:999px;background:#0a1a2b;color:#cdeaff;font-size:12px;cursor:pointer;user-select:none}
+  .sub-chip input{accent-color:#42c8ff}
+  .telemetry-grid{display:grid;grid-template-columns:minmax(360px,.9fr) minmax(480px,1.5fr);gap:14px}
+  .attitude-panel{background:#061321;border:1px solid #274a69;border-radius:14px;padding:12px}
+  .attitude-wrap{position:relative}
+  #attitudeCanvas{width:100%;height:auto;display:block;border-radius:10px;background:#07131e;border:1px solid #2b526f}
+  .attitude-paused{position:absolute;inset:0;display:grid;place-items:center;border-radius:10px;background:#020b13b8;color:#c9d7e5;font-weight:800;letter-spacing:.08em;pointer-events:none}
+  .attitude-paused.hidden{display:none}
+  .console-title-row{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .console-title-row .section-title{margin:0 auto 0 0}
+  .console-body.hidden{display:none}
+  .console-toggle{min-width:64px}
+  .attitude-readout{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:9px}
+  .attitude-readout div{background:#0b1d30;border:1px solid #294b68;border-radius:8px;padding:7px;text-align:center;font:12px ui-monospace,Consolas,monospace}
+  .attitude-readout b{display:block;color:#a9eaff;font-size:16px;margin-top:2px}
+  .telemetry-values{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:7px}
+  .tel-value{background:#071726;border:1px solid #294866;border-radius:9px;padding:8px 9px;min-height:55px}
+  .tel-value span{display:block;color:#8faac3;font-size:11px;margin-bottom:4px}
+  .tel-value b{font:14px ui-monospace,Consolas,monospace;color:#d8f3ff;word-break:break-word}
+  .sensor-flags{grid-column:1/-1;background:#071726;border:1px solid #294866;border-radius:9px;padding:8px 10px;font-size:12px;color:#c6e6fa}
+  .telemetry-console{margin-top:10px}
+  #telemetryLog{height:170px;overflow:auto;background:#020b13;border:1px solid #23425f;border-radius:10px;padding:9px;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;color:#a7f3d0}
+  .telemetry-note{margin-top:8px;color:#8fa8bf;font-size:11px;line-height:1.5}
   .debug-card{margin-top:16px;padding:14px}
   .debug-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.debug-head .section-title{margin-right:auto;margin-bottom:0}
   #log{height:300px;overflow:auto;background:#020b13;border:1px solid #23425f;border-radius:12px;padding:10px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
@@ -69,23 +99,20 @@
   .manual{display:flex;gap:8px;margin-top:9px}.manual input{flex:1;background:#071522;border:1px solid #244765;color:white;border-radius:9px;padding:9px}
   .footnote{margin-top:10px;color:#8ea5bd;font-size:12px;line-height:1.6}
   .modal-tip{background:#2e2710;border:1px solid #66521a;border-radius:10px;padding:9px 10px;color:#ffe7a6;font-size:12px}
-  @media(max-width:1080px){.grid{grid-template-columns:1fr}.side{display:grid;grid-template-columns:1fr 1fr}.debug-card{margin-top:12px}}
-  @media(max-width:760px){.app{padding:8px}.topbar{position:static}.remote-card{padding:8px}.remote-shell{min-width:680px}.side{display:flex}.grid{display:block}.debug-card{margin-top:12px}}
+  @media(max-width:1080px){.grid{grid-template-columns:1fr}.side{display:grid;grid-template-columns:1fr 1fr}.telemetry-grid{grid-template-columns:1fr}.debug-card{margin-top:12px}}
+  @media(max-width:760px){.app{padding:8px}.topbar{position:static}.remote-card{padding:8px}.remote-shell{min-width:680px}.side{display:flex}.grid{display:block}.telemetry-values{grid-template-columns:repeat(2,1fr)}.debug-card{margin-top:12px}}
 </style>
 </head>
 <body>
 <div class="app">
   <div class="topbar">
-    <div class="title">micro:bit × nRF24L01 Web 遙控器
-      <small>Web Serial → micro:bit USB COM → nRF24L01 → 無人機</small>
+    <div class="title">micro:bit × nRF24L01 Web Bluetooth 遙控器
+      <small>Web Bluetooth → micro:bit BLE UART → nRF24L01 → 無人機</small>
     </div>
-    <div><span id="statusDot" class="status-dot"></span><span id="serialStatus">未連線</span></div>
+    <div><span id="statusDot" class="status-dot"></span><span id="serialStatus">Bluetooth 未連線</span></div>
     <div class="toolbar">
-      <label>Baud
-        <select id="baud"><option>115200</option><option>57600</option><option>38400</option><option>19200</option><option>9600</option></select>
-      </label>
-      <button id="connectBtn" class="btn good">連接 USB COM</button>
-      <button id="disconnectBtn" class="btn secondary">中斷</button>
+      <button id="connectBtn" class="btn good">連接 micro:bit Bluetooth</button>
+      <button id="disconnectBtn" class="btn secondary">中斷 Bluetooth</button>
     </div>
   </div>
 
@@ -116,7 +143,8 @@
           CH: <span id="screenChannel">--</span><br>
           ACK: <span id="screenAck">--</span><br>
           TX: <span id="screenTx">0</span><br>
-          LINK: <span id="screenLink">OFF</span>
+          LINK: <span id="screenLink">OFF</span><br>
+          ARM: <span id="screenArm">--</span>
         </div>
         <div class="center-actions">
           <button id="unlockBtn" class="unlock">解鎖</button>
@@ -179,21 +207,93 @@
     </div>
   </div>
 
+  <div class="card telemetry-card">
+    <div class="telemetry-head">
+      <div class="section-title">無人機 Telemetry / Ground Station</div>
+      <button id="clearTelemetry" class="btn secondary">清除 Telemetry</button>
+      <div class="sub-options" title="勾選項目只控制 micro:bit 轉送到 USB；無人機端仍依原韌體固定循環送 ACK Payload">
+        <label class="sub-chip"><input type="checkbox" data-sub="ATT" checked>姿態 / 模式</label>
+        <label class="sub-chip"><input type="checkbox" data-sub="PWR" checked>電源 / NRF</label>
+        <label class="sub-chip"><input type="checkbox" data-sub="ALT" checked>高度</label>
+        <label class="sub-chip"><input type="checkbox" data-sub="FLOW" checked>光流位置</label>
+        <label class="sub-chip"><input type="checkbox" data-sub="IMU">IMU / 光流原始</label>
+        <label class="sub-chip"><input type="checkbox" data-sub="RC">飛機 RC Echo</label>
+        <label class="sub-chip" title="BLE UART 每行建議不超過 60 bytes；RAW ACK 在 BLE 版本停用"><input type="checkbox" data-sub="RAW" disabled>RAW ACK（BLE停用）</label>
+      </div>
+    </div>
+
+    <div class="telemetry-grid">
+      <div class="attitude-panel">
+        <div class="attitude-wrap">
+          <canvas id="attitudeCanvas" width="520" height="320"></canvas>
+          <div id="attitudePaused" class="attitude-paused">TELEMETRY 暫停</div>
+        </div>
+        <div class="attitude-readout">
+          <div>ROLL<b id="telRoll">0.00°</b></div>
+          <div>PITCH<b id="telPitch">0.00°</b></div>
+          <div>YAW<b id="telYaw">0.00°</b></div>
+        </div>
+        <div class="telemetry-note">姿態儀直接使用飛機 <code>0x01</code> 狀態 ACK Payload。Roll/Pitch/Yaw 已依飛機送出的 centi-degree ÷100 顯示。</div>
+      </div>
+
+      <div>
+        <div class="telemetry-values">
+          <div class="tel-value"><span>ARMED</span><b id="telArmed">--</b></div>
+          <div class="tel-value"><span>Flight mode raw</span><b id="telMode">--</b></div>
+          <div class="tel-value"><span>Control height /100</span><b id="telAttAlt">--</b></div>
+          <div class="tel-value"><span>Telemetry frames</span><b id="telFrames">0</b></div>
+
+          <div class="tel-value"><span>Power value raw</span><b id="telVoltage">--</b></div>
+          <div class="tel-value"><span>NRF SSI</span><b id="telNrfSsi">--</b></div>
+          <div class="tel-value"><span>Sensor flags</span><b id="telSensorFlags">--</b></div>
+          <div class="tel-value"><span>Set flags</span><b id="telSetFlags">--</b></div>
+
+          <div class="tel-value"><span>Barometer altitude</span><b id="telBarAlt">--</b></div>
+          <div class="tel-value"><span>Control altitude</span><b id="telControlAlt">--</b></div>
+          <div class="tel-value"><span>Flow X raw</span><b id="telFlowX">--</b></div>
+          <div class="tel-value"><span>Flow Y raw</span><b id="telFlowY">--</b></div>
+
+          <div class="tel-value"><span>Flow Z / height raw</span><b id="telFlowZ">--</b></div>
+          <div class="tel-value"><span>Flow quality</span><b id="telFlowQual">--</b></div>
+          <div class="tel-value"><span>ACC XYZ</span><b id="telAcc">--</b></div>
+          <div class="tel-value"><span>GYRO XYZ</span><b id="telGyro">--</b></div>
+
+          <div class="sensor-flags">Sensor status: <b id="telSensorText">等待 0x05 frame…</b></div>
+        </div>
+        <div class="telemetry-console">
+          <div class="console-title-row">
+            <div class="section-title">Telemetry RX 視窗</div>
+            <button id="toggleTelemetryConsole" class="btn secondary console-toggle">顯示</button>
+          </div>
+          <div id="telemetryConsoleBody" class="console-body hidden">
+            <div id="telemetryLog"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="card debug-card">
     <div class="debug-head">
-      <div class="section-title">UART / Web Serial Debug Console</div>
+      <div class="section-title">BLE UART Debug Console</div>
+      <button id="toggleDebugConsole" class="btn secondary console-toggle">顯示</button>
       <button id="clearLog" class="btn secondary">清除</button>
       <button id="saveLog" class="btn secondary">匯出 Log</button>
     </div>
-    <div id="log"></div>
-    <div class="manual">
-      <input id="manualInput" placeholder="手動送出，例如 CMD,PING 或 RC,1000,1500,1500,1500,1000,1000,1000,1000,1000,1000" />
-      <button id="manualSend" class="btn">送出</button>
-    </div>
-    <div class="footnote">
+    <div id="debugConsoleBody" class="console-body hidden">
+      <div id="log"></div>
+      <div class="manual">
+        <input id="manualInput" placeholder="手動送出，例如 CMD,PING 或 RC,1000,1500,1500,1500,1000,1000,1000,1000,1000,1000" />
+        <button id="manualSend" class="btn">送出</button>
+      </div>
+      <div class="footnote">
       建議協定：Browser → micro:bit 使用一行一命令並以 <code>\n</code> 結尾。<br>
       <code>RC,THR,YAW,ROLL,PITCH,AUX1,AUX2,AUX3,AUX4,AUX5,AUX6</code>、<code>CMD,PAIR</code>、<code>CMD,UNLOCK</code>、<code>CMD,ESTOP</code>、<code>CMD,PING</code>。<br>
-      micro:bit → Browser 可回傳 <code>STATE,CH,37</code>、<code>STATE,ACK,1</code>、<code>DBG,...</code> 或任意文字；所有資料都會顯示在此視窗。
+      micro:bit → Browser 可回傳 <code>STATE,CH,37</code>、<code>STATE,ACK,1</code>、<code>DBG,...</code>；飛機 ACK Payload 會轉成 <code>TEL,ATT</code>、<code>TEL,PWR</code>、<code>TEL,ALT</code> 等資料並顯示在上方 Ground Station。<br>
+      Telemetry 勾選框透過 <code>SUB,類型,0|1</code> 控制 micro:bit → Bluetooth 的轉送量；不會改變飛機端原本的 ACK Payload 循環。<br>
+      BLE UART Service: <code>6e400001-b5a3-f393-e0a9-e50e24dcca9e</code><br>
+      micro:bit → Browser TX: <code>6e400002-b5a3-f393-e0a9-e50e24dcca9e</code>；Browser → micro:bit RX: <code>6e400003-b5a3-f393-e0a9-e50e24dcca9e</code>。
+      </div>
     </div>
   </div>
 </div>
@@ -202,10 +302,18 @@
 (() => {
   'use strict';
 
-  let port = null;
-  let reader = null;
-  let writer = null;
-  let reading = false;
+  const UART_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  const UART_TX_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // micro:bit -> Browser (Notify)
+  const UART_RX_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e'; // Browser -> micro:bit (Write)
+  const BLE_CHUNK_SIZE = 20;
+  const BLE_MAX_LINE_BYTES = 60;
+
+  let bleDevice = null;
+  let bleServer = null;
+  let bleTxCharacteristic = null;
+  let bleRxCharacteristic = null;
+  let bleConnected = false;
+  let bleWriteChain = Promise.resolve();
   let rxBuffer = '';
   let txCount = 0;
   let rxCount = 0;
@@ -213,6 +321,25 @@
   let swapRollPitch = false;
   let throttleHold = true;
   let txLogEnabled = true;
+  let telemetryConsoleVisible = false;
+  let debugConsoleVisible = false;
+  let telemetryCount = 0;
+  let pairInProgress = false;
+  let pairedChannel = null;
+  let pairFailTimer = null;
+  let unlockInProgress = false;
+  let unlockStartedAt = 0;
+  let unlockResetState = false;
+  let unlockWatchdogTimer = null;
+  let unlockResetTimer = null;
+  const UNLOCK_TIMEOUT_MS = 5000;
+  const UNLOCK_RESET_SHOW_MS = 1200;
+  const telemetry = {
+    roll:0, pitch:0, yaw:0, attAltRaw:0, mode:null, armed:null,
+    voltageRaw:null, nrfSsi:null, sensorFlags:null, setFlags:null,
+    barAlt:null, controlAlt:null, flowX:null, flowY:null, flowZ:null,
+    flowQual:null, acc:[null,null,null], gyro:[null,null,null]
+  };
 
   const rc = {
     thr: 1000, yaw: 1500, roll: 1500, pitch: 1500,
@@ -223,13 +350,16 @@
 
   const $ = s => document.querySelector(s);
   const logEl = $('#log');
+  const telemetryLogEl = $('#telemetryLog');
   const enc = new TextEncoder();
+  const dec = new TextDecoder();
 
   function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
   function ch(v){ return Math.round(clamp(v, 1000, 2000)); }
   function stamp(){ const d = new Date(); return d.toLocaleTimeString('zh-TW',{hour12:false}) + '.' + String(d.getMilliseconds()).padStart(3,'0'); }
 
   function log(kind, text){
+    if(!debugConsoleVisible) return;
     const line = document.createElement('div');
     line.className = 'log-' + kind;
     line.textContent = `[${stamp()}] ${kind.toUpperCase()}  ${text}`;
@@ -238,10 +368,343 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  function telemetryLog(text){
+    if(!telemetryConsoleVisible) return;
+    const line = document.createElement('div');
+    line.textContent = `[${stamp()}] ${text}`;
+    telemetryLogEl.appendChild(line);
+    while(telemetryLogEl.childNodes.length > 350) telemetryLogEl.removeChild(telemetryLogEl.firstChild);
+    telemetryLogEl.scrollTop = telemetryLogEl.scrollHeight;
+  }
+
+  function u16ToS16(v){
+    v = Number(v) & 0xffff;
+    return v >= 0x8000 ? v - 0x10000 : v;
+  }
+
+  function sensorFlagText(flags){
+    if(flags == null) return '等待 0x05 frame…';
+    const parts = [];
+    parts.push((flags & 0x01) ? 'MPU✓' : 'MPU×');
+    parts.push((flags & 0x02) ? 'SPL✓' : 'SPL×');
+    parts.push((flags & 0x04) ? 'NRF✓' : 'NRF×');
+    parts.push((flags & 0x08) ? 'ULT✓' : 'ULT×');
+    parts.push((flags & 0x10) ? 'LOC✓' : 'LOC×');
+    if(flags & 0x20) parts.push('LOW-VOLT!');
+    parts.push((flags & 0x40) ? 'FLOW✓' : 'FLOW×');
+    return parts.join(' · ');
+  }
+
+  function drawAttitude(){
+    if(!telemetryConsoleVisible) return;
+    const canvas = $('#attitudeCanvas');
+    if(!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const roll = Number(telemetry.roll) || 0;
+    const pitch = Number(telemetry.pitch) || 0;
+    const yaw = ((Number(telemetry.yaw) || 0) % 360 + 360) % 360;
+    const pxPerDeg = 3.2;
+    const horizonY = Math.max(-130, Math.min(130, pitch * pxPerDeg));
+
+    ctx.clearRect(0,0,w,h);
+    ctx.save();
+    ctx.translate(w/2,h/2);
+    ctx.rotate(-roll*Math.PI/180);
+
+    ctx.fillStyle='#207cc0';
+    ctx.fillRect(-900,-900,1800,900+horizonY);
+    ctx.fillStyle='#74532d';
+    ctx.fillRect(-900,horizonY,1800,900);
+    ctx.strokeStyle='#f5f4e6';
+    ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(-900,horizonY); ctx.lineTo(900,horizonY); ctx.stroke();
+
+    ctx.font='13px ui-monospace,Consolas,monospace';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    for(let deg=-40; deg<=40; deg+=10){
+      if(deg===0) continue;
+      const y=horizonY-deg*pxPerDeg;
+      const len=(deg%20===0)?100:64;
+      ctx.strokeStyle='#ffffffcc'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(-len/2,y); ctx.lineTo(len/2,y); ctx.stroke();
+      ctx.fillStyle='#fff';
+      ctx.fillText(String(Math.abs(deg)), -len/2-20, y);
+      ctx.fillText(String(Math.abs(deg)), len/2+20, y);
+    }
+    ctx.restore();
+
+    // 固定 aircraft symbol
+    ctx.strokeStyle='#ffe36a'; ctx.lineWidth=5; ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(w/2-72,h/2); ctx.lineTo(w/2-18,h/2);
+    ctx.lineTo(w/2,h/2+12); ctx.lineTo(w/2+18,h/2);
+    ctx.lineTo(w/2+72,h/2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w/2,h/2+12); ctx.lineTo(w/2,h/2+34); ctx.stroke();
+
+    // roll marks
+    ctx.strokeStyle='#d9f4ff'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(w/2,h/2,132,Math.PI*1.18,Math.PI*1.82); ctx.stroke();
+    for(let d=-60; d<=60; d+=15){
+      const a=(-90+d)*Math.PI/180;
+      const r1=122, r2=(d%30===0)?140:134;
+      ctx.beginPath();
+      ctx.moveTo(w/2+Math.cos(a)*r1,h/2+Math.sin(a)*r1);
+      ctx.lineTo(w/2+Math.cos(a)*r2,h/2+Math.sin(a)*r2); ctx.stroke();
+    }
+
+    ctx.fillStyle='#eaf7ff'; ctx.font='bold 16px ui-monospace,Consolas,monospace';
+    ctx.textAlign='center';
+    ctx.fillText(`HDG ${yaw.toFixed(1)}°`,w/2,25);
+    ctx.font='12px ui-monospace,Consolas,monospace';
+    ctx.fillText(`ROLL ${roll.toFixed(2)}°   PITCH ${pitch.toFixed(2)}°`,w/2,h-18);
+  }
+
+  function updatePairButton(state, channel){
+    const btn = $('#pairBtn');
+    if(!btn) return;
+
+    btn.classList.remove('pairing','paired','failed');
+
+    if(state === 'pairing'){
+      pairInProgress = true;
+      btn.disabled = true;
+      btn.classList.add('pairing');
+      btn.textContent = '掃頻中…';
+      return;
+    }
+
+    pairInProgress = false;
+    btn.disabled = false;
+
+    if(state === 'paired' && Number.isFinite(Number(channel)) && Number(channel) >= 0){
+      pairedChannel = Number(channel);
+      btn.classList.add('paired');
+      // 已經對頻完成時，按鈕直接顯示目前頻道號碼。
+      btn.textContent = String(pairedChannel);
+      return;
+    }
+
+    if(state === 'failed'){
+      pairedChannel = null;
+      btn.classList.add('failed');
+      btn.textContent = '對頻失敗';
+      return;
+    }
+
+    pairedChannel = null;
+    btn.textContent = 'PAIR';
+  }
+
+  function showPairFailureThenReset(){
+    updatePairButton('failed');
+    if(pairFailTimer) clearTimeout(pairFailTimer);
+    pairFailTimer = setTimeout(()=>{
+      pairFailTimer = null;
+      if(!pairInProgress && pairedChannel == null) updatePairButton('idle');
+    }, 1600);
+  }
+
+  function updateArmScreen(){
+    const el = $('#screenArm');
+    if(!el) return;
+    el.textContent = telemetry.armed == null ? '--' : (telemetry.armed === 1 ? 'ARMED' : 'LOCK');
+  }
+
+  async function forceThrottleMinimum(reason){
+    rc.thr = 1000;
+    const left = $('#leftJoystick');
+    if(left){
+      const yawX = clamp((rc.yaw - 1500) / 500, -1, 1);
+      setStick(left, yawX, 1);
+    }
+    render();
+    if(reason) log('sys', reason);
+    if(writer) await sendLine(rcLine());
+  }
+
+  function clearUnlockTimers(){
+    if(unlockWatchdogTimer){
+      clearTimeout(unlockWatchdogTimer);
+      unlockWatchdogTimer = null;
+    }
+    if(unlockResetTimer){
+      clearTimeout(unlockResetTimer);
+      unlockResetTimer = null;
+    }
+  }
+
+  function finishUnlockReset(){
+    unlockResetTimer = null;
+    if(telemetry.armed === 1) return;
+    unlockResetState = false;
+    updateUnlockButton();
+    log('sys','UNLOCK reset complete - ready');
+  }
+
+  function enterUnlockReset(reason){
+    clearUnlockTimers();
+    unlockInProgress = false;
+    unlockResetState = true;
+    forceThrottleMinimum('Throttle forced to minimum (1000)');
+    updateUnlockButton();
+    log('err', reason);
+    unlockResetTimer = setTimeout(finishUnlockReset, UNLOCK_RESET_SHOW_MS);
+  }
+
+  function startUnlockWatchdog(){
+    if(unlockWatchdogTimer) clearTimeout(unlockWatchdogTimer);
+    unlockWatchdogTimer = setTimeout(()=>{
+      unlockWatchdogTimer = null;
+      if(!unlockInProgress || telemetry.armed === 1) return;
+      enterUnlockReset(`UNLOCK timeout after ${UNLOCK_TIMEOUT_MS/1000}s`);
+    }, UNLOCK_TIMEOUT_MS);
+  }
+
+  function updateUnlockButton(){
+    const btn = $('#unlockBtn');
+    if(!btn) return;
+
+    btn.classList.remove('unlocking','resetting','armed');
+
+    // 已由飛機 Telemetry 確認 ARM：紅色，禁止重複解鎖。
+    if(telemetry.armed === 1){
+      unlockInProgress = false;
+      unlockResetState = false;
+      btn.disabled = true;
+      btn.classList.add('armed');
+      btn.textContent = '已解鎖';
+      return;
+    }
+
+    // 解鎖 watchdog 超時或命令被拒絕：短暫顯示「重設」。
+    if(unlockResetState){
+      btn.disabled = true;
+      btn.classList.add('resetting');
+      btn.textContent = '重設';
+      return;
+    }
+
+    // 解鎖命令已送出但飛機仍回報 LOCK：保持「解鎖中」，不可再次按。
+    if(unlockInProgress){
+      btn.disabled = true;
+      btn.classList.add('unlocking');
+      btn.textContent = '解鎖中…';
+      return;
+    }
+
+    // 飛機回到 LOCK，恢復可操作的綠色解鎖按鈕。
+    btn.disabled = false;
+    btn.textContent = '解鎖';
+  }
+
+  function renderTelemetry(){
+    updateUnlockButton();
+    updateArmScreen();
+    if(!telemetryConsoleVisible) return;
+    $('#telRoll').textContent = telemetry.roll.toFixed(2)+'°';
+    $('#telPitch').textContent = telemetry.pitch.toFixed(2)+'°';
+    $('#telYaw').textContent = telemetry.yaw.toFixed(2)+'°';
+    $('#telArmed').textContent = telemetry.armed == null ? '--' : (telemetry.armed ? 'ARMED' : 'LOCK');
+    $('#telMode').textContent = telemetry.mode == null ? '--' : telemetry.mode;
+    $('#telAttAlt').textContent = telemetry.attAltRaw == null ? '--' : (telemetry.attAltRaw/100).toFixed(2)+' ('+telemetry.attAltRaw+')';
+    $('#telFrames').textContent = telemetryCount;
+    $('#telVoltage').textContent = telemetry.voltageRaw == null ? '--' : telemetry.voltageRaw;
+    $('#telNrfSsi').textContent = telemetry.nrfSsi == null ? '--' : telemetry.nrfSsi;
+    $('#telSensorFlags').textContent = telemetry.sensorFlags == null ? '--' : '0x'+Number(telemetry.sensorFlags).toString(16).toUpperCase().padStart(4,'0');
+    $('#telSetFlags').textContent = telemetry.setFlags == null ? '--' : '0x'+Number(telemetry.setFlags).toString(16).toUpperCase().padStart(4,'0');
+    $('#telBarAlt').textContent = telemetry.barAlt == null ? '--' : telemetry.barAlt;
+    $('#telControlAlt').textContent = telemetry.controlAlt == null ? '--' : telemetry.controlAlt;
+    $('#telFlowX').textContent = telemetry.flowX == null ? '--' : `${u16ToS16(telemetry.flowX)} [${telemetry.flowX}]`;
+    $('#telFlowY').textContent = telemetry.flowY == null ? '--' : `${u16ToS16(telemetry.flowY)} [${telemetry.flowY}]`;
+    $('#telFlowZ').textContent = telemetry.flowZ == null ? '--' : `${u16ToS16(telemetry.flowZ)} [${telemetry.flowZ}]`;
+    $('#telFlowQual').textContent = telemetry.flowQual == null ? '--' : telemetry.flowQual;
+    $('#telAcc').textContent = telemetry.acc[0] == null ? '--' : telemetry.acc.join(' / ');
+    $('#telGyro').textContent = telemetry.gyro[0] == null ? '--' : telemetry.gyro.join(' / ');
+    $('#telSensorText').textContent = sensorFlagText(telemetry.sensorFlags);
+    drawAttitude();
+  }
+
+  function handleTelemetry(p,line){
+    telemetryCount++;
+    const type=p[1] || '';
+    telemetryLog(line);
+
+    if(type==='ATT' && p.length>=8){
+      const previousArmed = telemetry.armed;
+      telemetry.roll=Number(p[2])/100;
+      telemetry.pitch=Number(p[3])/100;
+      telemetry.yaw=Number(p[4])/100;
+      telemetry.attAltRaw=Number(p[5]);
+      telemetry.mode=Number(p[6]);
+      telemetry.armed=Number(p[7]);
+
+      if(previousArmed !== telemetry.armed){
+        clearUnlockTimers();
+        unlockInProgress = false;
+        unlockResetState = false;
+
+        if(telemetry.armed === 1){
+          if(previousArmed === 0) log('sys','ARM state changed: LOCK -> ARM');
+          else log('sys','ARM state initialized: ARM');
+          forceThrottleMinimum('ARM confirmed: throttle forced to minimum (1000)');
+        }else if(telemetry.armed === 0){
+          if(previousArmed === 1) log('sys','ARM state changed: ARM -> LOCK');
+          else log('sys','ARM state initialized: LOCK');
+          forceThrottleMinimum('LOCK confirmed: throttle forced to minimum (1000)');
+        }
+      }
+    }else if(type==='IMU' && p.length>=11){
+      telemetry.acc=[Number(p[2]),Number(p[3]),Number(p[4])];
+      telemetry.gyro=[Number(p[5]),Number(p[6]),Number(p[7])];
+      telemetry.flowX=Number(p[8]); telemetry.flowY=Number(p[9]); telemetry.flowQual=Number(p[10]);
+    }else if(type==='PWR' && p.length>=8){
+      telemetry.voltageRaw=Number(p[2]);
+      telemetry.nrfSsi=Number(p[5]);
+      telemetry.sensorFlags=Number(p[6]);
+      telemetry.setFlags=Number(p[7]);
+    }else if(type==='ALT' && p.length>=4){
+      telemetry.barAlt=Number(p[2]); telemetry.controlAlt=Number(p[3]);
+    }else if(type==='FLOW' && p.length>=5){
+      telemetry.flowX=Number(p[2]); telemetry.flowY=Number(p[3]); telemetry.flowZ=Number(p[4]);
+    }
+    renderTelemetry();
+  }
+
+  function setTelemetryConsoleVisible(show){
+    telemetryConsoleVisible = !!show;
+    $('#telemetryConsoleBody').classList.toggle('hidden', !telemetryConsoleVisible);
+    $('#toggleTelemetryConsole').textContent = telemetryConsoleVisible ? '隱藏' : '顯示';
+    $('#attitudePaused').classList.toggle('hidden', telemetryConsoleVisible);
+
+    // 隱藏時不寫 Telemetry DOM、不畫姿態儀；仍保留最基本的 ARM 狀態解析供解鎖安全邏輯使用。
+    if(telemetryConsoleVisible){
+      renderTelemetry();
+      telemetryLog('Telemetry console enabled');
+    }
+  }
+
+  function setDebugConsoleVisible(show){
+    debugConsoleVisible = !!show;
+    $('#debugConsoleBody').classList.toggle('hidden', !debugConsoleVisible);
+    $('#toggleDebugConsole').textContent = debugConsoleVisible ? '隱藏' : '顯示';
+    if(debugConsoleVisible){
+      log('sys','Debug console enabled');
+    }
+  }
+
+  async function sendSubscriptions(){
+    const boxes=[...document.querySelectorAll('[data-sub]')];
+    for(const box of boxes){
+      await sendLine(`SUB,${box.dataset.sub},${box.checked?1:0}`);
+    }
+  }
+
   function connectedUI(on){
-    $('#statusDot').classList.toggle('on', on);
-    $('#serialStatus').textContent = on ? '已連線' : '未連線';
-    $('#screenLink').textContent = on ? 'USB' : 'OFF';
+    bleConnected = !!on;
+    $('#statusDot').classList.toggle('on', bleConnected);
+    $('#serialStatus').textContent = bleConnected ? 'Bluetooth 已連線' : 'Bluetooth 未連線';
+    $('#screenLink').textContent = bleConnected ? 'BLE' : 'OFF';
   }
 
   function render(){
@@ -275,83 +738,183 @@
     return ['RC', rc.thr, rc.yaw, roll, pitch, rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6].join(',');
   }
 
+  function isBluetoothConnected(){
+    return !!(bleDevice && bleDevice.gatt && bleDevice.gatt.connected && bleRxCharacteristic);
+  }
+
+  async function writeBleChunk(chunk){
+    if(!bleRxCharacteristic) throw new Error('BLE RX characteristic unavailable');
+
+    if(bleRxCharacteristic.properties?.writeWithoutResponse && typeof bleRxCharacteristic.writeValueWithoutResponse === 'function'){
+      await bleRxCharacteristic.writeValueWithoutResponse(chunk);
+      return;
+    }
+    if(bleRxCharacteristic.properties?.write && typeof bleRxCharacteristic.writeValueWithResponse === 'function'){
+      await bleRxCharacteristic.writeValueWithResponse(chunk);
+      return;
+    }
+    // Chrome 舊版相容路徑。
+    await bleRxCharacteristic.writeValue(chunk);
+  }
+
   async function sendLine(text){
-    if(!writer){ return false; }
+    if(!isBluetoothConnected()) return false;
+
+    const lineText = text.trim() + '\n';
+    const bytes = enc.encode(lineText);
+    if(bytes.length > BLE_MAX_LINE_BYTES){
+      log('err', `BLE UART line too long: ${bytes.length} bytes (max ${BLE_MAX_LINE_BYTES})`);
+      return false;
+    }
+
+    const task = async ()=>{
+      for(let i=0;i<bytes.length;i+=BLE_CHUNK_SIZE){
+        await writeBleChunk(bytes.slice(i, Math.min(i + BLE_CHUNK_SIZE, bytes.length)));
+      }
+    };
+
+    bleWriteChain = bleWriteChain.then(task, task);
     try{
-      await writer.write(enc.encode(text.trim() + '\n'));
+      await bleWriteChain;
       txCount++;
       if(txLogEnabled) log('tx', text.trim());
       render();
       return true;
     }catch(e){
-      log('err', 'TX failed: ' + e.message);
+      log('err', 'BLE TX failed: ' + e.message);
       return false;
     }
   }
 
-  async function connectSerial(){
-    if(!('serial' in navigator)){
-      log('err','此瀏覽器不支援 Web Serial。請使用桌面版 Chrome / Edge，並以 https 或 localhost 開啟。');
+  function handleBleNotification(event){
+    const value = event.target.value;
+    if(!value) return;
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    rxBuffer += dec.decode(bytes, {stream:true});
+
+    let idx;
+    while((idx = rxBuffer.indexOf('\n')) >= 0){
+      const line = rxBuffer.slice(0, idx).replace(/\r$/,'');
+      rxBuffer = rxBuffer.slice(idx + 1);
+      if(line.length) handleRx(line);
+    }
+
+    if(rxBuffer.length > 512){
+      rxBuffer = '';
+      log('err','BLE RX buffer reset: missing newline / oversized frame');
+    }
+  }
+
+  function onGattDisconnected(){
+    bleTxCharacteristic = null;
+    bleRxCharacteristic = null;
+    bleServer = null;
+    rxBuffer = '';
+    connectedUI(false);
+    updatePairButton('idle');
+    log('sys','Bluetooth disconnected');
+  }
+
+  async function connectBluetooth(){
+    if(!navigator.bluetooth){
+      log('err','此瀏覽器不支援 Web Bluetooth。請使用支援 Web Bluetooth 的 Chrome / Edge，並以 HTTPS 或 localhost 開啟。');
       return;
     }
+
     try{
-      port = await navigator.serial.requestPort();
-      const baudRate = Number($('#baud').value) || 115200;
-      await port.open({baudRate});
-      writer = port.writable.getWriter();
+      // 不只靠 UART Service UUID 搜尋：micro:bit 廣播封包不一定包含 UART UUID。
+      // 用 BBC micro:bit 名稱前綴列出裝置，再以 optionalServices 取得 UART Service 權限。
+      bleDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'BBC micro:bit' }],
+        optionalServices: [UART_SERVICE_UUID]
+      });
+
+      bleDevice.addEventListener('gattserverdisconnected', onGattDisconnected);
+      bleServer = await bleDevice.gatt.connect();
+
+      const service = await bleServer.getPrimaryService(UART_SERVICE_UUID);
+      // 方向務必注意：0002 是 micro:bit -> Browser 的 Notify；0003 是 Browser -> micro:bit 的 Write。
+      bleTxCharacteristic = await service.getCharacteristic(UART_TX_UUID);
+      bleRxCharacteristic = await service.getCharacteristic(UART_RX_UUID);
+
+      bleTxCharacteristic.addEventListener('characteristicvaluechanged', handleBleNotification);
+      await bleTxCharacteristic.startNotifications();
+
+      rxBuffer = '';
       connectedUI(true);
-      log('sys',`Serial connected @ ${baudRate} baud`);
-      readLoop();
+      log('sys', `Bluetooth connected: ${bleDevice.name || 'BBC micro:bit'}`);
+
       await sendLine('CMD,PING');
-    }catch(e){ log('err','Connect failed: ' + e.message); }
+      await sendSubscriptions();
+    }catch(e){
+      connectedUI(false);
+      log('err','Bluetooth connect failed: ' + e.message);
+    }
   }
 
-  async function disconnectSerial(){
-    reading = false;
-    try{ if(reader){ await reader.cancel(); reader.releaseLock(); reader = null; } }catch(e){}
-    try{ if(writer){ writer.releaseLock(); writer = null; } }catch(e){}
-    try{ if(port){ await port.close(); port = null; } }catch(e){}
-    connectedUI(false);
-    log('sys','Serial disconnected');
-  }
-
-  async function readLoop(){
-    if(!port?.readable) return;
-    reading = true;
-    reader = port.readable.getReader();
-    const dec = new TextDecoder();
+  async function disconnectBluetooth(){
     try{
-      while(reading){
-        const {value, done} = await reader.read();
-        if(done) break;
-        rxBuffer += dec.decode(value, {stream:true});
-        let idx;
-        while((idx = rxBuffer.indexOf('\n')) >= 0){
-          const line = rxBuffer.slice(0, idx).replace(/\r$/,'');
-          rxBuffer = rxBuffer.slice(idx + 1);
-          if(line.length) handleRx(line);
-        }
+      if(bleTxCharacteristic){
+        try{ await bleTxCharacteristic.stopNotifications(); }catch(_){ }
+        try{ bleTxCharacteristic.removeEventListener('characteristicvaluechanged', handleBleNotification); }catch(_){ }
       }
-    }catch(e){ if(reading) log('err','RX failed: ' + e.message); }
-    finally{
-      try{ reader.releaseLock(); }catch(e){}
-      reader = null;
+      if(bleDevice?.gatt?.connected) bleDevice.gatt.disconnect();
+    }catch(e){
+      log('err','Bluetooth disconnect failed: ' + e.message);
+    }finally{
+      bleTxCharacteristic = null;
+      bleRxCharacteristic = null;
+      bleServer = null;
+      rxBuffer = '';
+      connectedUI(false);
+      log('sys','Bluetooth disconnected');
     }
   }
 
   function handleRx(line){
     rxCount++;
-    log('rx', line);
     const p = line.split(',');
+    if(p[0] === 'TEL'){
+      handleTelemetry(p,line);
+      render();
+      return;
+    }
+    log('rx', line);
+
+    // micro:bit 若直接拒絕解鎖（例如油門條件不符），不必等 watchdog。
+    if(p[0] === 'DBG' && line.toUpperCase().includes('UNLOCK REJECTED')){
+      enterUnlockReset('UNLOCK rejected by micro:bit');
+    }
+
+    const upperLine = line.toUpperCase();
+
+    // PAIR 狀態：按下後顯示掃頻中；成功顯示頻道號碼；失敗短暫顯示紅色失敗。
+    if(p[0] === 'DBG' && (upperLine.includes('PAIR START') || upperLine.includes('AUTO PAIR START'))){
+      updatePairButton('pairing');
+    }
+    if(p[0] === 'DBG' && (upperLine.includes('PAIR FAILED') || upperLine.includes('AUTO PAIR FAILED'))){
+      showPairFailureThenReset();
+    }
+
     if(p[0] === 'STATE' && p[1] === 'CH'){
+      const chValue = Number(p[2]);
       $('#channelValue').textContent = p[2] ?? '--';
       $('#screenChannel').textContent = p[2] ?? '--';
+      if(Number.isFinite(chValue) && chValue >= 0){
+        if(pairFailTimer){ clearTimeout(pairFailTimer); pairFailTimer = null; }
+        updatePairButton('paired', chValue);
+      }else{
+        updatePairButton('idle');
+      }
     } else if(p[0] === 'STATE' && p[1] === 'ACK'){
       const ok = (p[2] === '1' || String(p[2]).toUpperCase() === 'OK');
       $('#ackValue').textContent = ok ? 'OK' : 'MISS';
       $('#screenAck').textContent = ok ? 'OK' : 'MISS';
     } else if(p[0] === 'STATE' && p[1] === 'LINK'){
       $('#screenLink').textContent = p[2] ?? '--';
+      if(String(p[2]).toUpperCase() === 'OFF' && pairInProgress){
+        showPairFailureThenReset();
+      }
     }
     render();
   }
@@ -441,12 +1004,42 @@
   makeJoystick($('#leftJoystick'),'left');
   makeJoystick($('#rightJoystick'),'right');
 
-  $('#connectBtn').addEventListener('click',connectSerial);
-  $('#disconnectBtn').addEventListener('click',disconnectSerial);
-  $('#pairBtn').addEventListener('click',()=>{ log('sys','PAIR requested'); sendLine('CMD,PAIR'); });
-  $('#unlockBtn').addEventListener('click',()=>{ log('sys','UNLOCK requested'); sendLine('CMD,UNLOCK'); });
+  $('#connectBtn').addEventListener('click',connectBluetooth);
+  $('#disconnectBtn').addEventListener('click',disconnectBluetooth);
+  $('#pairBtn').addEventListener('click',async ()=>{
+    if(pairInProgress) return;
+    if(pairFailTimer){ clearTimeout(pairFailTimer); pairFailTimer = null; }
+    updatePairButton('pairing');
+    log('sys','PAIR requested');
+    const sent = await sendLine('CMD,PAIR');
+    if(!sent) showPairFailureThenReset();
+  });
+  $('#unlockBtn').addEventListener('click',async ()=>{
+    if(unlockInProgress || unlockResetState || telemetry.armed === 1) return;
+
+    // 先把瀏覽器端油門拉到最低並立刻送一次 RC，避免 micro:bit 因舊油門值拒絕解鎖。
+    await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)');
+
+    unlockInProgress = true;
+    unlockStartedAt = Date.now();
+    updateUnlockButton();
+    log('sys','UNLOCK requested - waiting for ARM telemetry');
+
+    const sent = await sendLine('CMD,UNLOCK');
+    if(!sent){
+      enterUnlockReset('UNLOCK command send failed');
+      return;
+    }
+
+    startUnlockWatchdog();
+  });
   $('#estopBtn').addEventListener('click',()=>{
-    rc.thr=1000; rc.yaw=1500; render();
+    clearUnlockTimers();
+    unlockInProgress = false;
+    unlockResetState = false;
+    rc.yaw = 1500;
+    forceThrottleMinimum('EMERGENCY STOP: throttle forced to minimum (1000)');
+    updateUnlockButton();
     log('sys','EMERGENCY STOP requested');
     sendLine('CMD,ESTOP');
   });
@@ -459,6 +1052,13 @@
   $('#throttleHoldToggle').addEventListener('click',e=>{ throttleHold=!throttleHold; e.currentTarget.classList.toggle('on',throttleHold); e.currentTarget.textContent=throttleHold?'ON':'OFF'; });
   $('#txLogToggle').addEventListener('click',e=>{ txLogEnabled=!txLogEnabled; e.currentTarget.classList.toggle('on',txLogEnabled); e.currentTarget.textContent=txLogEnabled?'ON':'OFF'; });
 
+  document.querySelectorAll('[data-sub]').forEach(box=>box.addEventListener('change',()=>{
+    sendLine(`SUB,${box.dataset.sub},${box.checked?1:0}`);
+  }));
+  $('#toggleTelemetryConsole').addEventListener('click',()=>setTelemetryConsoleVisible(!telemetryConsoleVisible));
+  $('#clearTelemetry').addEventListener('click',()=>telemetryLogEl.textContent='');
+
+  $('#toggleDebugConsole').addEventListener('click',()=>setDebugConsoleVisible(!debugConsoleVisible));
   $('#clearLog').addEventListener('click',()=>logEl.textContent='');
   $('#saveLog').addEventListener('click',()=>{
     const blob = new Blob([logEl.innerText],{type:'text/plain;charset=utf-8'});
@@ -467,13 +1067,19 @@
   $('#manualSend').addEventListener('click',()=>{ const v=$('#manualInput').value.trim(); if(v){sendLine(v); $('#manualInput').value='';} });
   $('#manualInput').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#manualSend').click(); });
 
-  setInterval(()=>{ if(streamEnabled && writer) sendLine(rcLine()); },50);
+  setInterval(()=>{ if(streamEnabled && isBluetoothConnected()) sendLine(rcLine()); },50);
 
   window.addEventListener('load',()=>{
+    setTelemetryConsoleVisible(false);
+    setDebugConsoleVisible(false);
     setTimeout(()=>{ setStick($('#leftJoystick'),0,1); setStick($('#rightJoystick'),0,0); },50);
     render();
-    if(!('serial' in navigator)) log('err','Web Serial 不可用：請用桌面 Chrome / Edge，並以 https 或 localhost 開啟。');
-    else log('sys','Ready. 請先啟動 micro:bit，再按「連接 USB COM」。');
+    updatePairButton('idle');
+    updateArmScreen();
+    renderTelemetry();
+    updateUnlockButton();
+    if(!navigator.bluetooth) log('err','Web Bluetooth 不可用：請使用支援 Web Bluetooth 的 Chrome / Edge，並以 HTTPS 或 localhost 開啟。');
+    else log('sys','Ready. 請先啟動 micro:bit，再按「連接 micro:bit Bluetooth」。');
   });
 })();
 </script>
