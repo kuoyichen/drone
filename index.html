@@ -288,7 +288,7 @@
       </div>
       <div class="footnote">
       建議協定：Browser → micro:bit 使用一行一命令並以 <code>\n</code> 結尾。<br>
-      <code>RC,THR,YAW,ROLL,PITCH,AUX1,AUX2,AUX3,AUX4,AUX5,AUX6</code>、<code>CMD,PAIR</code>、<code>CMD,UNLOCK</code>、<code>CMD,ESTOP</code>、<code>CMD,PING</code>。<br>
+      BLE 內部優先使用 compact protocol：<code>R + 10×4-digit RC</code>、<code>P</code>=PAIR、<code>U</code>=UNLOCK、<code>E</code>=ESTOP、<code>Q</code>=PING。<br>舊版 <code>RC,...</code> / <code>CMD,...</code> 仍可由 micro:bit 相容解析。<br>
       micro:bit → Browser 可回傳 <code>STATE,CH,37</code>、<code>STATE,ACK,1</code>、<code>DBG,...</code>；飛機 ACK Payload 會轉成 <code>TEL,ATT</code>、<code>TEL,PWR</code>、<code>TEL,ALT</code> 等資料並顯示在上方 Ground Station。<br>
       Telemetry 勾選框透過 <code>SUB,類型,0|1</code> 控制 micro:bit → Bluetooth 的轉送量；不會改變飛機端原本的 ACK Payload 循環。<br>
       BLE UART Service: <code>6e400001-b5a3-f393-e0a9-e50e24dcca9e</code><br>
@@ -512,7 +512,7 @@
     el.textContent = telemetry.armed == null ? '--' : (telemetry.armed === 1 ? 'ARMED' : 'LOCK');
   }
 
-  async function forceThrottleMinimum(reason){
+  async function forceThrottleMinimum(reason, transmit = true){
     rc.thr = 1000;
     const left = $('#leftJoystick');
     if(left){
@@ -521,7 +521,7 @@
     }
     render();
     if(reason) log('sys', reason);
-    if(isBluetoothConnected()) await sendLine(rcLine());
+    if(transmit && isBluetoothConnected()) await sendLine(rcCompactLine());
   }
 
   function clearUnlockTimers(){
@@ -739,6 +739,20 @@
     return ['RC', rc.thr, rc.yaw, roll, pitch, rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6].join(',');
   }
 
+  // BLE compact RC: R + 10 個固定 4 位數值。
+  // 41 bytes（含 R，不含 newline），比 CSV RC 約 52 bytes 更有餘裕，
+  // 避免 micro:bit BLE UART 60-byte RX buffer 在緊接命令時溢位。
+  function rcCompactLine(){
+    let roll = ch(rc.roll + trimRoll);
+    let pitch = ch(rc.pitch + trimPitch);
+    if(swapRollPitch){ const t = roll; roll = pitch; pitch = t; }
+    const f4 = v => String(ch(v)).padStart(4,'0');
+    return 'R' + [
+      rc.thr, rc.yaw, roll, pitch,
+      rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6
+    ].map(f4).join('');
+  }
+
   function isBluetoothConnected(){
     return !!(bleDevice && bleDevice.gatt && bleDevice.gatt.connected && bleRxCharacteristic);
   }
@@ -851,7 +865,7 @@
       connectedUI(true);
       log('sys', `Bluetooth connected: ${bleDevice.name || 'BBC micro:bit'}`);
 
-      await sendLine('CMD,PING');
+      await sendLine('Q');
       await sendSubscriptions();
     }catch(e){
       connectedUI(false);
@@ -930,7 +944,7 @@
     rc[name] = rc[name] >= 1500 ? 1000 : 2000;
     document.querySelector(`[data-aux="${name}"]`)?.classList.toggle('active', rc[name] === 2000);
     render();
-    sendLine(rcLine());
+    sendLine(rcCompactLine());
   }
 
   function resetControls(){
@@ -941,7 +955,7 @@
     setStick($('#leftJoystick'), 0, 1);   // bottom: throttle min
     setStick($('#rightJoystick'), 0, 0);  // centered
     render();
-    sendLine(rcLine());
+    sendLine(rcCompactLine());
   }
 
   function makeJoystick(el, type){
@@ -982,12 +996,12 @@
         else { rc.thr=1000; setStick(el,0,1); }
       }
       render();
-      sendLine(rcLine());
+      sendLine(rcCompactLine());
     });
     el.addEventListener('dblclick', ()=>{
       if(type === 'left'){ rc.thr=1000; rc.yaw=1500; setStick(el,0,1); }
       else { rc.roll=1500; rc.pitch=1500; setStick(el,0,0); }
-      render(); sendLine(rcLine());
+      render(); sendLine(rcCompactLine());
     });
   }
 
@@ -1005,7 +1019,7 @@
     if(t==='pitch-') trimPitch=clamp(trimPitch-10,-200,200);
     if(t==='roll+') trimRoll=clamp(trimRoll+10,-200,200);
     if(t==='roll-') trimRoll=clamp(trimRoll-10,-200,200);
-    log('sys',`TRIM pitch=${trimPitch} roll=${trimRoll}`); render(); sendLine(rcLine());
+    log('sys',`TRIM pitch=${trimPitch} roll=${trimRoll}`); render(); sendLine(rcCompactLine());
   }));
 
   makeJoystick($('#leftJoystick'),'left');
@@ -1018,7 +1032,7 @@
     if(pairFailTimer){ clearTimeout(pairFailTimer); pairFailTimer = null; }
     updatePairButton('pairing');
     log('sys','PAIR requested');
-    const sent = await sendLine('CMD,PAIR');
+    const sent = await sendLine('P');
     if(!sent) showPairFailureThenReset();
   });
   $('#unlockBtn').addEventListener('click',async ()=>{
@@ -1031,10 +1045,13 @@
     updateUnlockButton();
     log('sys','UNLOCK requested - waiting for ARM telemetry');
 
-    // 先把瀏覽器端油門拉到最低並立刻送一次 RC，避免 micro:bit 因舊油門值拒絕解鎖。
-    await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)');
+    // 瀏覽器端先把油門 UI 拉到最低，但不先塞一條完整 RC。
+    // micro:bit 收到 compact U 時會自己把 webThrottle 設為 1000。
+    // 等待短時間讓可能正在送的上一筆週期 RC 離開 BLE UART buffer。
+    await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)', false);
+    await new Promise(resolve=>setTimeout(resolve, 90));
 
-    const sent = await sendLine('CMD,UNLOCK');
+    const sent = await sendLine('U');
     if(!sent){
       enterUnlockReset('UNLOCK command send failed');
       return;
@@ -1050,11 +1067,11 @@
     forceThrottleMinimum('EMERGENCY STOP: throttle forced to minimum (1000)');
     updateUnlockButton();
     log('sys','EMERGENCY STOP requested');
-    sendLine('CMD,ESTOP');
+    sendLine('E');
   });
   $('#neutralBtn').addEventListener('click',resetControls);
   $('#resetBtn').addEventListener('click',resetControls);
-  $('#pingBtn').addEventListener('click',()=>sendLine('CMD,PING'));
+  $('#pingBtn').addEventListener('click',()=>sendLine('Q'));
 
   $('#streamToggle').addEventListener('click',e=>{ streamEnabled=!streamEnabled; e.currentTarget.classList.toggle('on',streamEnabled); e.currentTarget.textContent=streamEnabled?'50 ms':'OFF'; });
   $('#swapToggle').addEventListener('click',e=>{ swapRollPitch=!swapRollPitch; e.currentTarget.classList.toggle('on',swapRollPitch); e.currentTarget.textContent=swapRollPitch?'ON':'OFF'; render(); });
@@ -1084,7 +1101,7 @@
     if(blePeriodicRcBusy || pairInProgress || unlockInProgress || unlockResetState) return;
 
     blePeriodicRcBusy = true;
-    sendLine(rcLine()).finally(()=>{
+    sendLine(rcCompactLine()).finally(()=>{
       blePeriodicRcBusy = false;
     });
   },50);
