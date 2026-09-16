@@ -314,6 +314,7 @@
   let bleRxCharacteristic = null;
   let bleConnected = false;
   let bleWriteChain = Promise.resolve();
+  let bleWriteMode = "unknown";
   let blePeriodicRcBusy = false;
   let rxBuffer = '';
   let txCount = 0;
@@ -521,7 +522,7 @@
     }
     render();
     if(reason) log('sys', reason);
-    if(transmit && isBluetoothConnected()) await sendLine(rcCompactLine());
+    if(transmit && isBluetoothConnected()) await sendLine(rcCoreLine());
   }
 
   function clearUnlockTimers(){
@@ -739,18 +740,29 @@
     return ['RC', rc.thr, rc.yaw, roll, pitch, rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6].join(',');
   }
 
-  // BLE compact RC: R + 10 個固定 4 位數值。
-  // 41 bytes（含 R，不含 newline），比 CSV RC 約 52 bytes 更有餘裕，
-  // 避免 micro:bit BLE UART 60-byte RX buffer 在緊接命令時溢位。
-  function rcCompactLine(){
+  // V4.3 BLE RC 核心封包刻意限制在單一 20-byte ATT packet 內：
+  // R + THR(4) + YAW(4) + ROLL(4) + PITCH(4) + newline = 18 bytes。
+  // AUX 改成「有變化才單獨送」，避免每 50ms 都要拆 3 個 BLE writes。
+  function rcCoreLine(){
     let roll = ch(rc.roll + trimRoll);
     let pitch = ch(rc.pitch + trimPitch);
     if(swapRollPitch){ const t = roll; roll = pitch; pitch = t; }
     const f4 = v => String(ch(v)).padStart(4,'0');
-    return 'R' + [
-      rc.thr, rc.yaw, roll, pitch,
-      rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6
-    ].map(f4).join('');
+    return 'R' + [rc.thr, rc.yaw, roll, pitch].map(f4).join('');
+  }
+
+  function auxCompactLine(name){
+    const index = Number(String(name).replace('aux',''));
+    const value = rc[name];
+    if(!Number.isFinite(index) || index < 1 || index > 6) return '';
+    return 'A' + index + String(ch(value)).padStart(4,'0');
+  }
+
+  async function syncAllAux(){
+    for(let i=1;i<=6;i++){
+      const name = 'aux' + i;
+      await sendLine(auxCompactLine(name));
+    }
   }
 
   function isBluetoothConnected(){
@@ -760,15 +772,22 @@
   async function writeBleChunk(chunk){
     if(!bleRxCharacteristic) throw new Error('BLE RX characteristic unavailable');
 
-    if(bleRxCharacteristic.properties?.writeWithoutResponse && typeof bleRxCharacteristic.writeValueWithoutResponse === 'function'){
-      await bleRxCharacteristic.writeValueWithoutResponse(chunk);
-      return;
-    }
+    // 控制鏈路優先使用 Write With Response。
+    // Android 上 Write Without Response 可能在 radio/stack 忙碌時被丟棄，
+    // Promise resolve 只代表資料交給本機 BLE stack，不代表 micro:bit 已收到。
     if(bleRxCharacteristic.properties?.write && typeof bleRxCharacteristic.writeValueWithResponse === 'function'){
+      bleWriteMode = 'with-response';
       await bleRxCharacteristic.writeValueWithResponse(chunk);
       return;
     }
-    // Chrome 舊版相容路徑。
+    if(bleRxCharacteristic.properties?.writeWithoutResponse && typeof bleRxCharacteristic.writeValueWithoutResponse === 'function'){
+      bleWriteMode = 'without-response';
+      await bleRxCharacteristic.writeValueWithoutResponse(chunk);
+      // fallback 模式保守留一點時間給 peripheral RX buffer
+      await new Promise(resolve=>setTimeout(resolve, 12));
+      return;
+    }
+    bleWriteMode = 'legacy';
     await bleRxCharacteristic.writeValue(chunk);
   }
 
@@ -789,7 +808,7 @@
         // micro:bit UART RX buffer 只有 60 bytes。手機端尤其是 writeWithoutResponse
         // 不要把 3 個 fragment 在同一個 event loop 瞬間灌完。
         if(i + BLE_CHUNK_SIZE < bytes.length){
-          await new Promise(resolve=>setTimeout(resolve, 3));
+          await new Promise(resolve=>setTimeout(resolve, 8));
         }
       }
     };
@@ -858,6 +877,9 @@
       bleTxCharacteristic = await service.getCharacteristic(UART_TX_UUID);
       bleRxCharacteristic = await service.getCharacteristic(UART_RX_UUID);
 
+      const rxProps = bleRxCharacteristic.properties;
+      log('sys', `BLE RX write=${!!rxProps.write} writeWithoutResponse=${!!rxProps.writeWithoutResponse}`);
+
       bleTxCharacteristic.addEventListener('characteristicvaluechanged', handleBleNotification);
       await bleTxCharacteristic.startNotifications();
 
@@ -867,6 +889,7 @@
 
       await sendLine('Q');
       await sendSubscriptions();
+      log('sys', `BLE control write mode: ${bleWriteMode}`);
     }catch(e){
       connectedUI(false);
       log('err','Bluetooth connect failed: ' + e.message);
@@ -944,7 +967,7 @@
     rc[name] = rc[name] >= 1500 ? 1000 : 2000;
     document.querySelector(`[data-aux="${name}"]`)?.classList.toggle('active', rc[name] === 2000);
     render();
-    sendLine(rcCompactLine());
+    sendLine(auxCompactLine(name));
   }
 
   function resetControls(){
@@ -955,7 +978,8 @@
     setStick($('#leftJoystick'), 0, 1);   // bottom: throttle min
     setStick($('#rightJoystick'), 0, 0);  // centered
     render();
-    sendLine(rcCompactLine());
+    sendLine(rcCoreLine());
+    syncAllAux();
   }
 
   function makeJoystick(el, type){
@@ -996,12 +1020,12 @@
         else { rc.thr=1000; setStick(el,0,1); }
       }
       render();
-      sendLine(rcCompactLine());
+      sendLine(rcCoreLine());
     });
     el.addEventListener('dblclick', ()=>{
       if(type === 'left'){ rc.thr=1000; rc.yaw=1500; setStick(el,0,1); }
       else { rc.roll=1500; rc.pitch=1500; setStick(el,0,0); }
-      render(); sendLine(rcCompactLine());
+      render(); sendLine(rcCoreLine());
     });
   }
 
@@ -1019,7 +1043,7 @@
     if(t==='pitch-') trimPitch=clamp(trimPitch-10,-200,200);
     if(t==='roll+') trimRoll=clamp(trimRoll+10,-200,200);
     if(t==='roll-') trimRoll=clamp(trimRoll-10,-200,200);
-    log('sys',`TRIM pitch=${trimPitch} roll=${trimRoll}`); render(); sendLine(rcCompactLine());
+    log('sys',`TRIM pitch=${trimPitch} roll=${trimRoll}`); render(); sendLine(rcCoreLine());
   }));
 
   makeJoystick($('#leftJoystick'),'left');
@@ -1045,11 +1069,10 @@
     updateUnlockButton();
     log('sys','UNLOCK requested - waiting for ARM telemetry');
 
-    // 瀏覽器端先把油門 UI 拉到最低，但不先塞一條完整 RC。
-    // micro:bit 收到 compact U 時會自己把 webThrottle 設為 1000。
-    // 等待短時間讓可能正在送的上一筆週期 RC 離開 BLE UART buffer。
-    await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)', false);
-    await new Promise(resolve=>setTimeout(resolve, 90));
+    // 先以單包 core RC 明確送一次 THR=1000，收到 GATT response 後再送 U。
+    // 這樣手機端與 micro:bit 對解鎖起始油門有一致狀態。
+    await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)', true);
+    await new Promise(resolve=>setTimeout(resolve, 40));
 
     const sent = await sendLine('U');
     if(!sent){
@@ -1094,14 +1117,14 @@
   $('#manualInput').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#manualSend').click(); });
 
   setInterval(()=>{
-    // BLE 手機端一次 RC 行需要拆成 3 個 write。若前一個週期尚未送完，
-    // 就直接略過這一拍，不把舊 RC 值無限制堆進 Promise queue。
+    // V4.3 核心 RC 含 newline 只有 18 bytes，單一 ATT write 即可完成。
+    // 若前一個週期尚未送完，就略過這一拍，不累積舊 RC。
     // PAIR / UNLOCK 期間也暫停週期 RC，讓控制命令優先。
     if(!streamEnabled || !isBluetoothConnected()) return;
     if(blePeriodicRcBusy || pairInProgress || unlockInProgress || unlockResetState) return;
 
     blePeriodicRcBusy = true;
-    sendLine(rcCompactLine()).finally(()=>{
+    sendLine(rcCoreLine()).finally(()=>{
       blePeriodicRcBusy = false;
     });
   },50);
