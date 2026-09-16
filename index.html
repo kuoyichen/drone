@@ -197,7 +197,7 @@
 
       <div>
         <div class="section-title">控制選項</div>
-        <div class="switch-row"><span>瀏覽器送 RC 更新</span><button id="streamToggle" class="mini-toggle on">50 ms</button></div>
+        <div class="switch-row"><span>瀏覽器送 RC 更新</span><button id="streamToggle" class="mini-toggle on">100 ms</button></div>
         <div class="switch-row"><span>Roll / Pitch 對調</span><button id="swapToggle" class="mini-toggle">OFF</button></div>
         <div class="switch-row"><span>左搖桿放開保留油門</span><button id="throttleHoldToggle" class="mini-toggle on">ON</button></div>
         <div class="switch-row"><span>輸出 UART TX 到 Log</span><button id="txLogToggle" class="mini-toggle on">ON</button></div>
@@ -329,6 +329,12 @@
   let pairInProgress = false;
   let pairedChannel = null;
   let pairFailTimer = null;
+  let pairProgressTimer = null;
+  let commandSeq = 0;
+  let pendingCommandKey = '';
+  let pendingCommandResolve = null;
+  let pendingCommandTimer = null;
+  let controlReady = false;
   let unlockInProgress = false;
   let unlockStartedAt = 0;
   let unlockResetState = false;
@@ -336,6 +342,8 @@
   let unlockResetTimer = null;
   const UNLOCK_TIMEOUT_MS = 5000;
   const UNLOCK_RESET_SHOW_MS = 1200;
+  const PAIR_TIMEOUT_MS = 12000;
+  const COMMAND_ACK_TIMEOUT_MS = 650;
   const telemetry = {
     roll:0, pitch:0, yaw:0, attAltRaw:0, mode:null, armed:null,
     voltageRaw:null, nrfSsi:null, sensorFlags:null, setFlags:null,
@@ -359,6 +367,48 @@
   function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
   function ch(v){ return Math.round(clamp(v, 1000, 2000)); }
   function stamp(){ const d = new Date(); return d.toLocaleTimeString('zh-TW',{hour12:false}) + '.' + String(d.getMilliseconds()).padStart(3,'0'); }
+
+  function sleepMs(ms){ return new Promise(resolve=>setTimeout(resolve,ms)); }
+
+  function clearPendingCommandAck(result){
+    if(pendingCommandTimer){ clearTimeout(pendingCommandTimer); pendingCommandTimer = null; }
+    const resolve = pendingCommandResolve;
+    pendingCommandKey = '';
+    pendingCommandResolve = null;
+    if(resolve) resolve(!!result);
+  }
+
+  function waitForCommandAck(key, timeoutMs){
+    if(pendingCommandResolve) clearPendingCommandAck(false);
+    return new Promise(resolve=>{
+      pendingCommandKey = key;
+      pendingCommandResolve = resolve;
+      pendingCommandTimer = setTimeout(()=>{
+        if(pendingCommandKey === key) clearPendingCommandAck(false);
+      }, timeoutMs);
+    });
+  }
+
+  async function sendReliableCommand(code){
+    commandSeq = (commandSeq + 1) % 100;
+    const key = code + String(commandSeq).padStart(2,'0');
+
+    for(let attempt=1; attempt<=3; attempt++){
+      const ackPromise = waitForCommandAck(key, COMMAND_ACK_TIMEOUT_MS);
+      const sent = await sendLine(key);
+      if(!sent){
+        clearPendingCommandAck(false);
+      }
+      const acked = await ackPromise;
+      if(acked){
+        log('sys', `${code} command accepted (${key})`);
+        return true;
+      }
+      log('sys', `${code} command retry ${attempt}/3`);
+      await sleepMs(120);
+    }
+    return false;
+  }
 
   function log(kind, text){
     if(!debugConsoleVisible) return;
@@ -499,12 +549,49 @@
   }
 
   function showPairFailureThenReset(){
+    if(pairProgressTimer){ clearTimeout(pairProgressTimer); pairProgressTimer = null; }
     updatePairButton('failed');
     if(pairFailTimer) clearTimeout(pairFailTimer);
     pairFailTimer = setTimeout(()=>{
       pairFailTimer = null;
       if(!pairInProgress && pairedChannel == null) updatePairButton('idle');
     }, 1600);
+  }
+
+  function startPairWatchdog(){
+    if(pairProgressTimer) clearTimeout(pairProgressTimer);
+    pairProgressTimer = setTimeout(()=>{
+      pairProgressTimer = null;
+      if(pairInProgress){
+        log('err', `PAIR timeout after ${PAIR_TIMEOUT_MS/1000}s`);
+        showPairFailureThenReset();
+      }
+    }, PAIR_TIMEOUT_MS);
+  }
+
+  function applyConfirmedArm(armedValue){
+    const newArmed = Number(armedValue) ? 1 : 0;
+    const previousArmed = telemetry.armed;
+    if(previousArmed === newArmed) return;
+
+    telemetry.armed = newArmed;
+    clearUnlockTimers();
+    unlockInProgress = false;
+    unlockResetState = false;
+
+    if(newArmed === 1){
+      if(previousArmed === 0) log('sys','ARM state changed: LOCK -> ARM');
+      else log('sys','ARM state confirmed: ARM');
+      forceThrottleMinimum('ARM confirmed: throttle forced to minimum (1000)');
+    }else{
+      if(previousArmed === 1) log('sys','ARM state changed: ARM -> LOCK');
+      else log('sys','ARM state confirmed: LOCK');
+      forceThrottleMinimum('LOCK confirmed: throttle forced to minimum (1000)');
+    }
+
+    updateUnlockButton();
+    updateArmScreen();
+    renderTelemetry();
   }
 
   function updateArmScreen(){
@@ -633,29 +720,13 @@
     telemetryLog(line);
 
     if(type==='ATT' && p.length>=8){
-      const previousArmed = telemetry.armed;
       telemetry.roll=Number(p[2])/100;
       telemetry.pitch=Number(p[3])/100;
       telemetry.yaw=Number(p[4])/100;
       telemetry.attAltRaw=Number(p[5]);
       telemetry.mode=Number(p[6]);
-      telemetry.armed=Number(p[7]);
-
-      if(previousArmed !== telemetry.armed){
-        clearUnlockTimers();
-        unlockInProgress = false;
-        unlockResetState = false;
-
-        if(telemetry.armed === 1){
-          if(previousArmed === 0) log('sys','ARM state changed: LOCK -> ARM');
-          else log('sys','ARM state initialized: ARM');
-          forceThrottleMinimum('ARM confirmed: throttle forced to minimum (1000)');
-        }else if(telemetry.armed === 0){
-          if(previousArmed === 1) log('sys','ARM state changed: ARM -> LOCK');
-          else log('sys','ARM state initialized: LOCK');
-          forceThrottleMinimum('LOCK confirmed: throttle forced to minimum (1000)');
-        }
-      }
+      // p[7] 是原始 armed 值；按鈕與安全狀態改用 micro:bit
+      // 連續確認後送出的 STATE,ARM，避免舊 ACK FIFO 造成假解鎖。
     }else if(type==='IMU' && p.length>=11){
       telemetry.acc=[Number(p[2]),Number(p[3]),Number(p[4])];
       telemetry.gyro=[Number(p[5]),Number(p[6]),Number(p[7])];
@@ -679,7 +750,10 @@
     $('#toggleTelemetryConsole').textContent = telemetryConsoleVisible ? '隱藏' : '顯示';
     $('#attitudePaused').classList.toggle('hidden', telemetryConsoleVisible);
 
-    // 隱藏時不寫 Telemetry DOM、不畫姿態儀；仍保留最基本的 ARM 狀態解析供解鎖安全邏輯使用。
+    // 隱藏時不只停止 DOM / 姿態儀，也通知 micro:bit 停止一般 Telemetry BLE 轉送。
+    // ARM 狀態由獨立的 STATE,ARM 事件維持，不受此開關影響。
+    if(isBluetoothConnected()) sendSubscriptionMask();
+
     if(telemetryConsoleVisible){
       renderTelemetry();
       telemetryLog('Telemetry console enabled');
@@ -695,11 +769,24 @@
     }
   }
 
-  async function sendSubscriptions(){
-    const boxes=[...document.querySelectorAll('[data-sub]')];
-    for(const box of boxes){
-      await sendLine(`SUB,${box.dataset.sub},${box.checked?1:0}`);
-    }
+  function currentSubscriptionMask(){
+    if(!telemetryConsoleVisible) return 0;
+    let mask = 0;
+    document.querySelectorAll('[data-sub]').forEach(box=>{
+      if(!box.checked) return;
+      if(box.dataset.sub === 'ATT') mask |= 0x01;
+      else if(box.dataset.sub === 'PWR') mask |= 0x02;
+      else if(box.dataset.sub === 'ALT') mask |= 0x04;
+      else if(box.dataset.sub === 'FLOW') mask |= 0x08;
+      else if(box.dataset.sub === 'IMU') mask |= 0x10;
+      else if(box.dataset.sub === 'RC') mask |= 0x20;
+    });
+    return mask;
+  }
+
+  async function sendSubscriptionMask(){
+    if(!isBluetoothConnected()) return false;
+    return await sendLine('S' + currentSubscriptionMask());
   }
 
   function connectedUI(on){
@@ -740,7 +827,7 @@
     return ['RC', rc.thr, rc.yaw, roll, pitch, rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6].join(',');
   }
 
-  // V4.3 BLE RC 核心封包刻意限制在單一 20-byte ATT packet 內：
+  // V4.4 BLE RC 核心封包刻意限制在單一 20-byte ATT packet 內：
   // R + THR(4) + YAW(4) + ROLL(4) + PITCH(4) + newline = 18 bytes。
   // AUX 改成「有變化才單獨送」，避免每 50ms 都要拆 3 個 BLE writes。
   function rcCoreLine(){
@@ -884,11 +971,15 @@
       await bleTxCharacteristic.startNotifications();
 
       rxBuffer = '';
+      controlReady = false;
       connectedUI(true);
       log('sys', `Bluetooth connected: ${bleDevice.name || 'BBC micro:bit'}`);
 
+      // 連線後先保持 Telemetry 關閉，只送一個短 Q 取得目前 CH / LINK / ARM。
+      // 等 Q 完成後才開啟週期 RC，避免連線瞬間就塞滿 RX queue。
       await sendLine('Q');
-      await sendSubscriptions();
+      await sleepMs(120);
+      controlReady = true;
       log('sys', `BLE control write mode: ${bleWriteMode}`);
     }catch(e){
       connectedUI(false);
@@ -910,6 +1001,8 @@
       bleRxCharacteristic = null;
       bleServer = null;
       rxBuffer = '';
+      controlReady = false;
+      if(pendingCommandResolve) clearPendingCommandAck(false);
       connectedUI(false);
       log('sys','Bluetooth disconnected');
     }
@@ -932,6 +1025,11 @@
 
     const upperLine = line.toUpperCase();
 
+    if(p[0] === 'STATE' && p[1] === 'CMDACK'){
+      const key = p[2] || '';
+      if(pendingCommandKey === key) clearPendingCommandAck(true);
+    }
+
     // PAIR 狀態：按下後顯示掃頻中；成功顯示頻道號碼；失敗短暫顯示紅色失敗。
     if(p[0] === 'DBG' && (upperLine.includes('PAIR START') || upperLine.includes('AUTO PAIR START'))){
       updatePairButton('pairing');
@@ -946,10 +1044,17 @@
       $('#screenChannel').textContent = p[2] ?? '--';
       if(Number.isFinite(chValue) && chValue >= 0){
         if(pairFailTimer){ clearTimeout(pairFailTimer); pairFailTimer = null; }
+        if(pairProgressTimer){ clearTimeout(pairProgressTimer); pairProgressTimer = null; }
         updatePairButton('paired', chValue);
-      }else{
+      }else if(!pairInProgress){
         updatePairButton('idle');
       }
+    } else if(p[0] === 'STATE' && p[1] === 'ARM'){
+      applyConfirmedArm(Number(p[2]));
+    } else if(p[0] === 'STATE' && p[1] === 'PAIR'){
+      const pairState = String(p[2] || '').toUpperCase();
+      if(pairState === 'START') updatePairButton('pairing');
+      else if(pairState === 'FAIL') showPairFailureThenReset();
     } else if(p[0] === 'STATE' && p[1] === 'ACK'){
       const ok = (p[2] === '1' || String(p[2]).toUpperCase() === 'OK');
       $('#ackValue').textContent = ok ? 'OK' : 'MISS';
@@ -1056,8 +1161,15 @@
     if(pairFailTimer){ clearTimeout(pairFailTimer); pairFailTimer = null; }
     updatePairButton('pairing');
     log('sys','PAIR requested');
-    const sent = await sendLine('P');
-    if(!sent) showPairFailureThenReset();
+
+    // 先停止週期 RC，使用帶 token 的 command ACK；收不到 ACK 會自動重送。
+    const accepted = await sendReliableCommand('P');
+    if(!accepted){
+      log('err','PAIR command was not acknowledged by micro:bit');
+      showPairFailureThenReset();
+      return;
+    }
+    startPairWatchdog();
   });
   $('#unlockBtn').addEventListener('click',async ()=>{
     if(unlockInProgress || unlockResetState || telemetry.armed === 1) return;
@@ -1072,14 +1184,15 @@
     // 先以單包 core RC 明確送一次 THR=1000，收到 GATT response 後再送 U。
     // 這樣手機端與 micro:bit 對解鎖起始油門有一致狀態。
     await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)', true);
-    await new Promise(resolve=>setTimeout(resolve, 40));
+    await sleepMs(120);
 
-    const sent = await sendLine('U');
-    if(!sent){
-      enterUnlockReset('UNLOCK command send failed');
+    const accepted = await sendReliableCommand('U');
+    if(!accepted){
+      enterUnlockReset('UNLOCK command was not acknowledged by micro:bit');
       return;
     }
 
+    // 5 秒 watchdog 從 micro:bit 真正 ACK U 之後才開始計時。
     startUnlockWatchdog();
   });
   $('#estopBtn').addEventListener('click',()=>{
@@ -1096,13 +1209,13 @@
   $('#resetBtn').addEventListener('click',resetControls);
   $('#pingBtn').addEventListener('click',()=>sendLine('Q'));
 
-  $('#streamToggle').addEventListener('click',e=>{ streamEnabled=!streamEnabled; e.currentTarget.classList.toggle('on',streamEnabled); e.currentTarget.textContent=streamEnabled?'50 ms':'OFF'; });
+  $('#streamToggle').addEventListener('click',e=>{ streamEnabled=!streamEnabled; e.currentTarget.classList.toggle('on',streamEnabled); e.currentTarget.textContent=streamEnabled?'100 ms':'OFF'; });
   $('#swapToggle').addEventListener('click',e=>{ swapRollPitch=!swapRollPitch; e.currentTarget.classList.toggle('on',swapRollPitch); e.currentTarget.textContent=swapRollPitch?'ON':'OFF'; render(); });
   $('#throttleHoldToggle').addEventListener('click',e=>{ throttleHold=!throttleHold; e.currentTarget.classList.toggle('on',throttleHold); e.currentTarget.textContent=throttleHold?'ON':'OFF'; });
   $('#txLogToggle').addEventListener('click',e=>{ txLogEnabled=!txLogEnabled; e.currentTarget.classList.toggle('on',txLogEnabled); e.currentTarget.textContent=txLogEnabled?'ON':'OFF'; });
 
   document.querySelectorAll('[data-sub]').forEach(box=>box.addEventListener('change',()=>{
-    sendLine(`SUB,${box.dataset.sub},${box.checked?1:0}`);
+    if(telemetryConsoleVisible) sendSubscriptionMask();
   }));
   $('#toggleTelemetryConsole').addEventListener('click',()=>setTelemetryConsoleVisible(!telemetryConsoleVisible));
   $('#clearTelemetry').addEventListener('click',()=>telemetryLogEl.textContent='');
@@ -1117,17 +1230,17 @@
   $('#manualInput').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#manualSend').click(); });
 
   setInterval(()=>{
-    // V4.3 核心 RC 含 newline 只有 18 bytes，單一 ATT write 即可完成。
+    // V4.4 核心 RC 含 newline 只有 18 bytes，單一 ATT write 即可完成。
     // 若前一個週期尚未送完，就略過這一拍，不累積舊 RC。
     // PAIR / UNLOCK 期間也暫停週期 RC，讓控制命令優先。
-    if(!streamEnabled || !isBluetoothConnected()) return;
-    if(blePeriodicRcBusy || pairInProgress || unlockInProgress || unlockResetState) return;
+    if(!streamEnabled || !isBluetoothConnected() || !controlReady) return;
+    if(blePeriodicRcBusy || pairInProgress || unlockInProgress || unlockResetState || pendingCommandKey) return;
 
     blePeriodicRcBusy = true;
     sendLine(rcCoreLine()).finally(()=>{
       blePeriodicRcBusy = false;
     });
-  },50);
+  },100);
 
   window.addEventListener('load',()=>{
     setTelemetryConsoleVisible(false);
