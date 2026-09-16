@@ -218,7 +218,7 @@
         <label class="sub-chip"><input type="checkbox" data-sub="FLOW" checked>光流位置</label>
         <label class="sub-chip"><input type="checkbox" data-sub="IMU">IMU / 光流原始</label>
         <label class="sub-chip"><input type="checkbox" data-sub="RC">飛機 RC Echo</label>
-        <label class="sub-chip" title="BLE UART 每行建議不超過 60 bytes；RAW ACK 在 BLE 版本停用"><input type="checkbox" data-sub="RAW" disabled>RAW ACK（BLE停用）</label>
+        <label class="sub-chip" title="BLE UART 由 micro:bit 端自動切成 20-byte notifications；RAW ACK 在 BLE 版本停用"><input type="checkbox" data-sub="RAW" disabled>RAW ACK（BLE停用）</label>
       </div>
     </div>
 
@@ -314,6 +314,7 @@
   let bleRxCharacteristic = null;
   let bleConnected = false;
   let bleWriteChain = Promise.resolve();
+  let blePeriodicRcBusy = false;
   let rxBuffer = '';
   let txCount = 0;
   let rxCount = 0;
@@ -520,7 +521,7 @@
     }
     render();
     if(reason) log('sys', reason);
-    if(writer) await sendLine(rcLine());
+    if(isBluetoothConnected()) await sendLine(rcLine());
   }
 
   function clearUnlockTimers(){
@@ -770,6 +771,12 @@
     const task = async ()=>{
       for(let i=0;i<bytes.length;i+=BLE_CHUNK_SIZE){
         await writeBleChunk(bytes.slice(i, Math.min(i + BLE_CHUNK_SIZE, bytes.length)));
+
+        // micro:bit UART RX buffer 只有 60 bytes。手機端尤其是 writeWithoutResponse
+        // 不要把 3 個 fragment 在同一個 event loop 瞬間灌完。
+        if(i + BLE_CHUNK_SIZE < bytes.length){
+          await new Promise(resolve=>setTimeout(resolve, 3));
+        }
       }
     };
 
@@ -1017,13 +1024,15 @@
   $('#unlockBtn').addEventListener('click',async ()=>{
     if(unlockInProgress || unlockResetState || telemetry.armed === 1) return;
 
-    // 先把瀏覽器端油門拉到最低並立刻送一次 RC，避免 micro:bit 因舊油門值拒絕解鎖。
-    await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)');
-
+    // 先進入「解鎖中」狀態，立即停止週期 RC 排隊，避免手機 BLE write queue
+    // 把 CMD,UNLOCK 卡在大量 RC 更新後面。
     unlockInProgress = true;
     unlockStartedAt = Date.now();
     updateUnlockButton();
     log('sys','UNLOCK requested - waiting for ARM telemetry');
+
+    // 先把瀏覽器端油門拉到最低並立刻送一次 RC，避免 micro:bit 因舊油門值拒絕解鎖。
+    await forceThrottleMinimum('UNLOCK requested: throttle forced to minimum (1000)');
 
     const sent = await sendLine('CMD,UNLOCK');
     if(!sent){
@@ -1067,7 +1076,18 @@
   $('#manualSend').addEventListener('click',()=>{ const v=$('#manualInput').value.trim(); if(v){sendLine(v); $('#manualInput').value='';} });
   $('#manualInput').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#manualSend').click(); });
 
-  setInterval(()=>{ if(streamEnabled && isBluetoothConnected()) sendLine(rcLine()); },50);
+  setInterval(()=>{
+    // BLE 手機端一次 RC 行需要拆成 3 個 write。若前一個週期尚未送完，
+    // 就直接略過這一拍，不把舊 RC 值無限制堆進 Promise queue。
+    // PAIR / UNLOCK 期間也暫停週期 RC，讓控制命令優先。
+    if(!streamEnabled || !isBluetoothConnected()) return;
+    if(blePeriodicRcBusy || pairInProgress || unlockInProgress || unlockResetState) return;
+
+    blePeriodicRcBusy = true;
+    sendLine(rcLine()).finally(()=>{
+      blePeriodicRcBusy = false;
+    });
+  },50);
 
   window.addEventListener('load',()=>{
     setTelemetryConsoleVisible(false);
