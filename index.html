@@ -32,6 +32,7 @@
   .pcb-label{position:absolute;font-size:12px;color:#d8efff;opacity:.88;text-align:center;line-height:1.2}
   .control-btn{position:absolute;width:64px;height:64px;border-radius:50%;border:3px solid #d6edff;background:radial-gradient(circle at 35% 30%,#3f7bad,#153d68 65%,#0a2745);box-shadow:0 6px 16px #00162d, inset 0 0 0 4px #0c3157;color:white;font-weight:800;cursor:pointer;user-select:none;touch-action:none}
   .control-btn.active{box-shadow:0 0 0 5px #7dd3fc44,0 0 25px #67e8f9,inset 0 0 0 4px #0c3157;background:radial-gradient(circle at 35% 30%,#47b5d8,#12618d 65%,#0a3551)}
+  .control-btn.aux1{font-size:12px}
   .control-btn.small{width:48px;height:48px;font-size:12px}
   .control-btn.pair{border-radius:16px;width:76px;height:48px;font-size:12px;transition:background .18s,border-color .18s,box-shadow .18s,opacity .18s}
   .control-btn.pair.pairing{background:radial-gradient(circle at 35% 30%,#c99a2e,#74550e 70%);border-color:#ffe08a;box-shadow:0 0 18px #fbbf2466,inset 0 0 0 3px #6b4d0b;cursor:not-allowed}
@@ -153,6 +154,7 @@
       </div>
       <div class="vision-tools">
         <button id="cameraStartBtn">啟動相機</button>
+        <button id="cameraPositionHoldBtn" data-aux="aux1" type="button" aria-pressed="true">定點定高：開</button>
         <button id="cameraAutoStopBtn" class="stop hidden">停止自動</button>
       </div>
 
@@ -170,7 +172,7 @@
         <div class="pcb-label aux3l">AUX3 · PB11<br>拋飛 / 起飛</div>
         <button class="control-btn aux3" data-aux="aux3">A3</button>
         <div class="pcb-label aux1l">AUX1 · PC13<br>定點定高</div>
-        <button class="control-btn aux1" data-aux="aux1">A1</button>
+        <button class="control-btn aux1" data-aux="aux1" type="button" aria-label="定點定高：開" aria-pressed="true">定點定高</button>
         <div class="pcb-label pairl">PB7<br>對頻</div>
         <button id="pairBtn" class="control-btn pair">PAIR</button>
 
@@ -407,7 +409,7 @@
 
   const rc = {
     thr: 1000, yaw: 1500, roll: 1500, pitch: 1500,
-    aux1: 1000, aux2: 1000, aux3: 1000, aux4: 1000, aux5: 1000, aux6: 1000
+    aux1: 2000, aux2: 1000, aux3: 1000, aux4: 1000, aux5: 1000, aux6: 1000
   };
   let trimPitch = 0;
   let trimRoll = 0;
@@ -925,6 +927,13 @@
     $('#vRoll').textContent = view.roll;
     $('#vPitch').textContent = view.pitch;
     $('#vAux1').textContent = view.aux1;
+    document.querySelectorAll('[data-aux="aux1"]').forEach(button=>{
+      const enabled = view.aux1 === 2000;
+      button.classList.toggle('active', enabled);
+      button.setAttribute('aria-pressed', String(enabled));
+      button.setAttribute('aria-label', `定點定高：${enabled ? '開' : '關'}`);
+      button.textContent = button.id === 'cameraPositionHoldBtn' ? `定點定高：${enabled ? '開' : '關'}` : '定點定高';
+    });
     $('#vAux2').textContent = view.aux2;
     $('#vAux3').textContent = view.aux3;
     $('#vAux4').textContent = view.aux4;
@@ -1097,6 +1106,7 @@
       await sendLine('S' + currentSubscriptionMask());
       await sendLine('Q');
       await sleepMs(120);
+      await sendLine(auxCompactLine('aux1'));
       controlReady = true;
       markRcDirty();
       lastRcSendAt = 0;
@@ -1192,14 +1202,15 @@
 
   function setAux(name){
     rc[name] = rc[name] >= 1500 ? 1000 : 2000;
-    document.querySelector(`[data-aux="${name}"]`)?.classList.toggle('active', rc[name] === 2000);
+    document.querySelectorAll(`[data-aux="${name}"]`).forEach(button=>button.classList.toggle('active', rc[name] === 2000));
     render();
     sendLine(auxCompactLine(name));
   }
 
   function resetControls(){
     rc.thr = 1000; rc.yaw = 1500; rc.roll = 1500; rc.pitch = 1500;
-    rc.aux1 = rc.aux2 = rc.aux3 = rc.aux4 = rc.aux5 = rc.aux6 = 1000;
+    rc.aux1 = 2000;
+    rc.aux2 = rc.aux3 = rc.aux4 = rc.aux5 = rc.aux6 = 1000;
     trimPitch = 0; trimRoll = 0;
     document.querySelectorAll('[data-aux]').forEach(b=>b.classList.remove('active'));
     setStick($('#leftJoystick'), 0, 1);   // bottom: throttle min
