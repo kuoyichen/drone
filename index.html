@@ -99,6 +99,28 @@
   .manual{display:flex;gap:8px;margin-top:9px}.manual input{flex:1;background:#071522;border:1px solid #244765;color:white;border-radius:9px;padding:9px}
   .footnote{margin-top:10px;color:#8ea5bd;font-size:12px;line-height:1.6}
   .modal-tip{background:#2e2710;border:1px solid #66521a;border-radius:10px;padding:9px 10px;color:#ffe7a6;font-size:12px}
+
+  /* ===== V5 Camera / ArUco flight view ===== */
+  .vision-card{margin-top:16px;padding:12px}
+  .camera-stage{position:relative;width:100%;aspect-ratio:16/9;min-height:260px;max-height:72vh;background:#02060b;border:1px solid #315b7e;border-radius:16px;overflow:hidden;cursor:crosshair;touch-action:none;box-shadow:inset 0 0 40px #000a}
+  .camera-stage video,.camera-stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  #visionOverlay{z-index:2;pointer-events:none}
+  #cameraVideo{z-index:1;background:#000}
+  .vision-hud{position:absolute;left:10px;top:10px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;max-width:72%;pointer-events:none}
+  .vision-pill{background:#020b13cc;border:1px solid #315b7ecc;border-radius:999px;padding:5px 8px;color:#d8efff;font:11px ui-monospace,Consolas,monospace;backdrop-filter:blur(4px)}
+  .vision-pill.ok{border-color:#2e8c70;color:#b9f7dd}.vision-pill.warn{border-color:#9a7720;color:#ffe29a}.vision-pill.danger{border-color:#a63d56;color:#ffc0cc}
+  .vision-tools{position:absolute;right:10px;top:10px;z-index:6;display:flex;gap:7px}
+  .vision-tools button{border:1px solid #4b7194;background:#071522d9;color:#eaf4ff;border-radius:9px;padding:7px 10px;font-size:12px;cursor:pointer;backdrop-filter:blur(4px)}
+  .vision-tools button.active{border-color:#52d39d;background:#0e4939dd;color:#caffea}
+  .vision-tools button.stop{border-color:#c34c63;background:#661c2bdd;color:#ffe1e7}
+  .vision-tools button.hidden{display:none}
+  .vision-hint{position:absolute;left:50%;bottom:7px;transform:translateX(-50%);z-index:3;background:#020b1399;border:1px solid #315b7e88;border-radius:999px;padding:5px 10px;color:#d8efff;font-size:11px;pointer-events:none;white-space:nowrap}
+  .camera-joystick{z-index:7!important;width:clamp(112px,18vw,168px)!important;height:clamp(112px,18vw,168px)!important;top:auto!important;bottom:4%!important;opacity:.56;backdrop-filter:blur(1px);transition:opacity .15s;box-shadow:inset 0 0 28px #000a,0 8px 20px #0008!important}
+  .camera-joystick:active{opacity:.78}
+  .camera-joystick .stick{width:40%!important;height:40%!important;border-width:2px!important}
+  .camera-left-stick{left:3%!important;right:auto!important}.camera-right-stick{right:3%!important;left:auto!important}
+  @media(max-width:760px){.vision-card{padding:7px}.camera-stage{min-height:230px;max-height:62vh}.vision-hud{max-width:78%;left:6px;top:6px}.vision-tools{right:6px;top:6px}.vision-pill{font-size:9px;padding:4px 6px}.vision-tools button{font-size:10px;padding:6px 8px}.vision-hint{font-size:9px;bottom:5px}.camera-joystick{width:clamp(104px,30vw,142px)!important;height:clamp(104px,30vw,142px)!important;bottom:3%!important}}
+
   @media(max-width:1080px){.grid{grid-template-columns:1fr}.side{display:grid;grid-template-columns:1fr 1fr}.telemetry-grid{grid-template-columns:1fr}.debug-card{margin-top:12px}}
   @media(max-width:760px){.app{padding:8px}.topbar{position:static}.remote-card{padding:8px}.remote-shell{min-width:680px}.side{display:flex}.grid{display:block}.telemetry-values{grid-template-columns:repeat(2,1fr)}.debug-card{margin-top:12px}}
 </style>
@@ -113,6 +135,30 @@
     <div class="toolbar">
       <button id="connectBtn" class="btn good">連接 micro:bit Bluetooth</button>
       <button id="disconnectBtn" class="btn secondary">中斷 Bluetooth</button>
+    </div>
+  </div>
+
+
+  <!-- V5: camera / ArUco view. Only the two translucent joysticks are overlaid as flight controls. -->
+  <div class="card vision-card">
+    <div id="cameraStage" class="camera-stage">
+      <video id="cameraVideo" playsinline muted></video>
+      <canvas id="visionOverlay"></canvas>
+
+      <div class="vision-hud">
+        <span id="cvStatus" class="vision-pill warn">OpenCV 載入中…</span>
+        <span id="arucoStatus" class="vision-pill">ArUco --</span>
+        <span id="arucoAngles" class="vision-pill">R -- · P -- · Y --</span>
+        <span id="visionNavStatus" class="vision-pill">MANUAL</span>
+      </div>
+      <div class="vision-tools">
+        <button id="cameraStartBtn">啟動相機</button>
+        <button id="cameraAutoStopBtn" class="stop hidden">停止自動</button>
+      </div>
+
+      <div id="cameraLeftJoystick" class="joystick camera-joystick camera-left-stick"><div class="stick"></div></div>
+      <div id="cameraRightJoystick" class="joystick camera-joystick camera-right-stick"><div class="stick"></div></div>
+      <div class="vision-hint">辨識 ArUco 後，點畫面設定目的地；手動碰任一搖桿會立即退出自動導航</div>
     </div>
   </div>
 
@@ -366,6 +412,33 @@
   let trimPitch = 0;
   let trimRoll = 0;
 
+
+  // ===== V5 ArUco / camera navigation =====
+  // Dictionary is intentionally identical to the supplied self-driving-car page.
+  const ARUCO_DICT = ["1010001011011001010111100", "0000111000000011011100110", "1101011110000111011011101", "1000000111001010111110111", "1101011101011010100100100", "1110101000000100000101101", "0110100111101011111101100", "0111000100001010001101011", "1000011010110000100110010", "1001100010011111110100101", "1001111001110111000000011", "1101000101101101011000000", "1111001100010101100010001", "0010111100111000101100110", "1111111001111110010101000", "0010100011110001101111111", "0100101111010011101011000", "0101111101010001001101111", "0111101100100110111000100", "1000001100001110111101000", "1001011011101101001110101", "1010100001110010001000000", "1011010110000110010100001", "0101110100001001011011110", "1100111001101000000100011", "1101001011001100101110010", "1110000111100111010001011", "0001000100100001001000110", "0001110111001011001110010", "0001001000010001000111011", "0001001110011011101101110", "0001101101000100001110011", "0010000001101000011001110", "0010010101010101011001000", "0010001100100001110111010", "0011110100110111111101010", "0100110011000101010101100", "0100000101101000100000001", "0100110101010110100011101", "0100001100011110001110010", "0101011010010100000100101", "0101001010010111110011110", "0110110000100100111110111", "0110000110000100111011001", "0110110100111111000110001", "0111010010110001001111010", "0111010011011100110010111", "0111110010100100000000110", "0111101011001000100100101", "0111101101011011111010111"];
+  const ARUCO_MAX_ERR_BITS = 2;
+  const VISION_PROC_W = 640;
+  const VISION_INTERVAL_MS = 80; // ~12.5 Hz CV, while micro:bit keeps nRF RC at its own high rate.
+  const ARUCO_FOV_DEG = 60;
+  const ARUCO_MARKER_MM = 50;
+  const AUTO_MAX_STICK_DELTA = 180; // gentle lateral authority; throttle is never changed by auto navigation.
+  const AUTO_LOST_GRACE_MS = 280;
+  const AUTO_LOST_CANCEL_MS = 1600;
+  let cvReady = false;
+  let cameraStream = null;
+  let cameraLoopStarted = false;
+  let cameraRunning = false;
+  let lastVisionFrameAt = 0;
+  let visionProcCanvas = document.createElement('canvas');
+  let visionProcCtx = visionProcCanvas.getContext('2d',{willReadFrequently:true});
+  let visionTarget = null;
+  let visionTargetReached = false;
+  let visionAutoActive = false;
+  let visionArriveFrames = 0;
+  let visionLastMarker = null;
+  let visionLastSeenAt = 0;
+  let visionLostNeutralized = false;
+
   const $ = s => document.querySelector(s);
   const logEl = $('#log');
   const telemetryLogEl = $('#telemetryLog');
@@ -597,6 +670,7 @@
       else log('sys','ARM state confirmed: ARM');
       forceThrottleMinimum('ARM confirmed: throttle forced to minimum (1000)');
     }else{
+      cancelVisionAuto('飛機已上鎖', true);
       if(previousArmed === 1) log('sys','ARM state changed: ARM -> LOCK');
       else log('sys','ARM state confirmed: LOCK');
       forceThrottleMinimum('LOCK confirmed: throttle forced to minimum (1000)');
@@ -620,6 +694,7 @@
     if(left){
       const yawX = clamp((rc.yaw - 1500) / 500, -1, 1);
       setStick(left, yawX, 1);
+      syncStickMirrors('left', yawX, 1, left);
     }
     render();
     if(reason) log('sys', reason);
@@ -978,6 +1053,7 @@
     bleServer = null;
     rxBuffer = '';
     connectedUI(false);
+    cancelVisionAuto('Bluetooth 已斷線', false);
     updatePairButton('idle');
     log('sys','Bluetooth disconnected');
   }
@@ -1047,6 +1123,7 @@
       bleServer = null;
       rxBuffer = '';
       controlReady = false;
+      cancelVisionAuto('Bluetooth 已斷線', false);
       if(pendingCommandResolve) clearPendingCommandAck(false);
       connectedUI(false);
       log('sys','Bluetooth disconnected');
@@ -1127,6 +1204,8 @@
     document.querySelectorAll('[data-aux]').forEach(b=>b.classList.remove('active'));
     setStick($('#leftJoystick'), 0, 1);   // bottom: throttle min
     setStick($('#rightJoystick'), 0, 0);  // centered
+    syncStickMirrors('left', 0, 1, $('#leftJoystick'));
+    syncStickMirrors('right', 0, 0, $('#rightJoystick'))
     render();
     markRcDirty();
     sendLine(rcCoreLine());
@@ -1147,7 +1226,8 @@
       if(mag > maxR){ dx = dx/mag*maxR; dy = dy/mag*maxR; }
       const x = clamp(dx/maxR,-1,1), y = clamp(dy/maxR,-1,1);
       lastX = x; lastY = y;
-      knob.style.transform = `translate(calc(-50% + ${dx}px),calc(-50% + ${dy}px))`;
+      setStick(el,x,y);
+      syncStickMirrors(type,x,y,el);
       if(type === 'left'){
         rc.yaw = ch(1500 + x*500);
         rc.thr = ch(1500 - y*500);
@@ -1159,25 +1239,29 @@
       markRcDirty();
     }
 
-    el.addEventListener('pointerdown', e=>{ active=true; el.setPointerCapture(e.pointerId); apply(e.clientX,e.clientY); });
+    el.addEventListener('pointerdown', e=>{
+      if(visionAutoActive) cancelVisionAuto('手動搖桿接管', false);
+      active=true; el.setPointerCapture(e.pointerId); apply(e.clientX,e.clientY);
+    });
     el.addEventListener('pointermove', e=>{ if(active) apply(e.clientX,e.clientY); });
     el.addEventListener('pointerup', e=>{
       active=false;
       try{el.releasePointerCapture(e.pointerId);}catch(_){ }
       if(type === 'right'){
-        rc.roll=1500; rc.pitch=1500; setStick(el,0,0);
+        rc.roll=1500; rc.pitch=1500; setStick(el,0,0); syncStickMirrors('right',0,0,el);
       }else{
         rc.yaw=1500;
-        if(throttleHold){ setStick(el,0,lastY); }
-        else { rc.thr=1000; setStick(el,0,1); }
+        if(throttleHold){ setStick(el,0,lastY); syncStickMirrors('left',0,lastY,el); }
+        else { rc.thr=1000; setStick(el,0,1); syncStickMirrors('left',0,1,el); }
       }
       render();
       markRcDirty();
       sendLine(rcCoreLine()).then(ok=>{ if(ok){ lastRcSendAt = Date.now(); rcDirty = false; } });
     });
     el.addEventListener('dblclick', ()=>{
-      if(type === 'left'){ rc.thr=1000; rc.yaw=1500; setStick(el,0,1); }
-      else { rc.roll=1500; rc.pitch=1500; setStick(el,0,0); }
+      if(visionAutoActive) cancelVisionAuto('手動搖桿接管', false);
+      if(type === 'left'){ rc.thr=1000; rc.yaw=1500; setStick(el,0,1); syncStickMirrors('left',0,1,el); }
+      else { rc.roll=1500; rc.pitch=1500; setStick(el,0,0); syncStickMirrors('right',0,0,el); }
       render(); markRcDirty();
       sendLine(rcCoreLine()).then(ok=>{ if(ok){ lastRcSendAt = Date.now(); rcDirty = false; } });
     });
@@ -1188,6 +1272,311 @@
     const r = el.getBoundingClientRect();
     const maxR = (r.width || 210)*0.33;
     knob.style.transform = `translate(calc(-50% + ${x*maxR}px),calc(-50% + ${y*maxR}px))`;
+  }
+
+
+  function syncStickMirrors(type,x,y,source){
+    const ids = type === 'left' ? ['#leftJoystick','#cameraLeftJoystick'] : ['#rightJoystick','#cameraRightJoystick'];
+    ids.forEach(sel=>{
+      const el=$(sel);
+      if(el && el!==source) setStick(el,x,y);
+    });
+  }
+
+  function setVisionNavStatus(text,kind){
+    const el=$('#visionNavStatus');
+    if(!el) return;
+    el.textContent=text;
+    el.classList.remove('ok','warn','danger');
+    if(kind) el.classList.add(kind);
+  }
+
+  function setVisionLateralNeutral(){
+    rc.roll=1500;
+    rc.pitch=1500;
+    rc.yaw=1500;
+    markRcDirty();
+    syncStickMirrors('right',0,0,null);
+    render();
+  }
+
+  function cancelVisionAuto(reason, clearTarget){
+    if(visionAutoActive || visionLostNeutralized) setVisionLateralNeutral();
+    visionAutoActive=false;
+    visionArriveFrames=0;
+    visionLostNeutralized=false;
+    if(clearTarget){ visionTarget=null; visionTargetReached=false; }
+    const stop=$('#cameraAutoStopBtn');
+    if(stop) stop.classList.add('hidden');
+    if(reason) setVisionNavStatus(reason, reason.includes('到達') ? 'ok' : 'warn');
+    else setVisionNavStatus('MANUAL');
+  }
+
+  function arucoRot90(s){ let o=''; for(let c=0;c<5;c++) for(let r=4;r>=0;r--) o+=s[r*5+c]; return o; }
+  function arucoHamming(a,b){ let d=0; for(let i=0;i<25;i++) if(a[i]!==b[i]) d++; return d; }
+  function arucoMatchDict(bits){
+    let best=null, cur=bits;
+    for(let k=0;k<4;k++){
+      for(let id=0;id<ARUCO_DICT.length;id++){
+        const d=arucoHamming(cur,ARUCO_DICT[id]);
+        if(d<=ARUCO_MAX_ERR_BITS && (!best || d<best.dist)) best={id,rot:k,dist:d};
+      }
+      cur=arucoRot90(cur);
+    }
+    return best;
+  }
+
+  function arucoDecode(gray,pts){
+    const CELL=10, N=7, S=CELL*N;
+    const src=window.cv.matFromArray(4,1,window.cv.CV_32FC2,pts.flat());
+    const dst=window.cv.matFromArray(4,1,window.cv.CV_32FC2,[0,0,S,0,S,S,0,S]);
+    const M=window.cv.getPerspectiveTransform(src,dst), warp=new window.cv.Mat(), th=new window.cv.Mat();
+    window.cv.warpPerspective(gray,warp,M,new window.cv.Size(S,S));
+    window.cv.threshold(warp,th,0,255,window.cv.THRESH_BINARY|window.cv.THRESH_OTSU);
+    const d=th.data; let bits='', borderErr=0;
+    for(let r=0;r<N;r++) for(let q=0;q<N;q++){
+      let white=0,tot=0;
+      for(let y=r*CELL+3;y<r*CELL+CELL-3;y++) for(let x=q*CELL+3;x<q*CELL+CELL-3;x++){
+        tot++; if(d[y*S+x]>127) white++;
+      }
+      const bit=white>tot/2?1:0;
+      if(r===0||q===0||r===N-1||q===N-1){ if(bit) borderErr++; } else bits+=bit;
+    }
+    src.delete();dst.delete();M.delete();warp.delete();th.delete();
+    if(borderErr>6) return null;
+    const m=arucoMatchDict(bits); if(!m) return null;
+    const k=m.rot, corners=[0,1,2,3].map(i=>pts[(i+4-k)%4]);
+    return {id:m.id,corners};
+  }
+
+  function arucoEstimatePose(corners,K,dist,ms){
+    const h=ms/2;
+    const obj=window.cv.matFromArray(4,1,window.cv.CV_32FC3,[-h,h,0, h,h,0, h,-h,0, -h,-h,0]);
+    const im=window.cv.matFromArray(4,1,window.cv.CV_32FC2,corners.flat());
+    const rvec=new window.cv.Mat(3,1,window.cv.CV_64F), tvec=new window.cv.Mat(3,1,window.cv.CV_64F);
+    const flag=(window.cv.SOLVEPNP_IPPE_SQUARE!==undefined)?window.cv.SOLVEPNP_IPPE_SQUARE:window.cv.SOLVEPNP_ITERATIVE;
+    window.cv.solvePnP(obj,im,K,dist,rvec,tvec,false,flag);
+    const R=new window.cv.Mat(); window.cv.Rodrigues(rvec,R);
+    const r=R.data64F;
+    const pitch=Math.atan2(-r[6],Math.hypot(r[7],r[8]));
+    const roll=Math.atan2(r[7],r[8]);
+    const yaw=Math.atan2(r[3],r[0]);
+    const t=[tvec.data64F[0],tvec.data64F[1],tvec.data64F[2]];
+    const out={t,roll:roll*180/Math.PI,pitch:pitch*180/Math.PI,yaw:yaw*180/Math.PI};
+    obj.delete();im.delete();rvec.delete();tvec.delete();R.delete();
+    return out;
+  }
+
+  function markerNavPose(marker){
+    if(!marker || !marker.corners) return null;
+    const c=marker.corners;
+    let cx=0,cy=0,side=0;
+    c.forEach(p=>{cx+=p[0];cy+=p[1];}); cx/=4;cy/=4;
+    for(let i=0;i<4;i++) side+=Math.hypot(c[i][0]-c[(i+1)%4][0],c[i][1]-c[(i+1)%4][1]);
+    side/=4;
+    const fx=(c[0][0]+c[1][0])/2, fy=(c[0][1]+c[1][1])/2;
+    let hx=fx-cx,hy=fy-cy; const hl=Math.hypot(hx,hy)||1; hx/=hl;hy/=hl;
+    return {center:{x:cx,y:cy},heading:{x:hx,y:hy},side};
+  }
+
+  function drawVisionMarker(ctx,marker){
+    const c=marker.corners, nav=markerNavPose(marker); if(!nav) return;
+    ctx.save();
+    ctx.lineWidth=Math.max(2,ctx.canvas.width/360); ctx.strokeStyle='#22e07a'; ctx.lineJoin='round';
+    ctx.beginPath(); c.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); ctx.stroke();
+    ctx.fillStyle='#ff5a5a'; ctx.beginPath(); ctx.arc(c[0][0],c[0][1],Math.max(4,ctx.canvas.width/250),0,Math.PI*2); ctx.fill();
+    const ex=nav.center.x+nav.heading.x*nav.side*0.9, ey=nav.center.y+nav.heading.y*nav.side*0.9;
+    ctx.strokeStyle='#ffd166';ctx.lineWidth=Math.max(3,ctx.canvas.width/300);ctx.beginPath();ctx.moveTo(nav.center.x,nav.center.y);ctx.lineTo(ex,ey);ctx.stroke();
+    ctx.font=`700 ${Math.max(15,ctx.canvas.width/55)}px ui-monospace,Consolas,monospace`;
+    ctx.fillStyle='#22e07a';ctx.fillText(`ID:${marker.id}`,nav.center.x+8,nav.center.y-8);
+    ctx.restore();
+  }
+
+  function drawVisionTarget(ctx,marker){
+    if(!visionTarget) return;
+    const p=visionTarget;
+    ctx.save();
+    const pulse=14+Math.sin(Date.now()/180)*3;
+    ctx.strokeStyle=visionTargetReached?'#34d399':(visionAutoActive?'#ff6b7e':'#ffe36a');
+    ctx.lineWidth=4;ctx.beginPath();ctx.arc(p.x,p.y,pulse,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(p.x-20,p.y);ctx.lineTo(p.x+20,p.y);ctx.moveTo(p.x,p.y-20);ctx.lineTo(p.x,p.y+20);ctx.stroke();
+    if(marker){
+      const nav=markerNavPose(marker);
+      if(nav){ctx.setLineDash([8,6]);ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(nav.center.x,nav.center.y);ctx.lineTo(p.x,p.y);ctx.stroke();ctx.setLineDash([]);}
+    }
+    ctx.restore();
+  }
+
+  function updateVisionReadout(marker){
+    const st=$('#arucoStatus'), ang=$('#arucoAngles');
+    if(!marker){
+      st.textContent='ArUco 未辨識'; st.classList.remove('ok'); st.classList.add('warn');
+      ang.textContent='R -- · P -- · Y --';
+      return;
+    }
+    st.textContent=`ArUco ID ${marker.id} · ${Math.hypot(...marker.pose.t).toFixed(0)} mm`;
+    st.classList.remove('warn');st.classList.add('ok');
+    ang.textContent=`R ${marker.pose.roll.toFixed(1)}° · P ${marker.pose.pitch.toFixed(1)}° · Y ${marker.pose.yaw.toFixed(1)}°`;
+  }
+
+  function updateVisionAuto(marker){
+    if(!visionAutoActive || !visionTarget || !marker) return;
+    if(telemetry.armed !== 1 || !isBluetoothConnected() || !controlReady){ cancelVisionAuto('AUTO 停止：控制鏈路/ARM 不成立',false); return; }
+    const nav=markerNavPose(marker); if(!nav) return;
+    const dx=visionTarget.x-nav.center.x, dy=visionTarget.y-nav.center.y;
+    const dist=Math.hypot(dx,dy);
+    const reach=Math.max(28,Math.min(90,nav.side*0.85));
+    if(dist<=reach) visionArriveFrames++; else visionArriveFrames=0;
+    if(visionArriveFrames>=3){
+      visionTargetReached=true;
+      cancelVisionAuto('已到達目標',false);
+      return;
+    }
+    const rightX=-nav.heading.y, rightY=nav.heading.x;
+    const forwardErr=dx*nav.heading.x+dy*nav.heading.y;
+    const rightErr=dx*rightX+dy*rightY;
+    const denom=Math.max(180,nav.side*4.0);
+    const pitchDelta=clamp((forwardErr/denom)*AUTO_MAX_STICK_DELTA,-AUTO_MAX_STICK_DELTA,AUTO_MAX_STICK_DELTA);
+    const rollDelta=clamp((rightErr/denom)*AUTO_MAX_STICK_DELTA,-AUTO_MAX_STICK_DELTA,AUTO_MAX_STICK_DELTA);
+    rc.yaw=1500;
+    rc.pitch=ch(1500+pitchDelta); // forward marker direction -> right joystick up / pitch > 1500
+    rc.roll=ch(1500+rollDelta);   // marker right direction -> roll > 1500
+    markRcDirty();
+    syncStickMirrors('right',clamp((rc.roll-1500)/500,-1,1),clamp(-(rc.pitch-1500)/500,-1,1),null);
+    render();
+    setVisionNavStatus(`AUTO · ${dist.toFixed(0)}px`,'ok');
+    visionLostNeutralized=false;
+  }
+
+  function handleVisionMarkerLost(now){
+    updateVisionReadout(null);
+    if(!visionAutoActive) return;
+    const lostMs=now-visionLastSeenAt;
+    if(lostMs>AUTO_LOST_GRACE_MS && !visionLostNeutralized){
+      setVisionLateralNeutral();
+      visionLostNeutralized=true;
+      setVisionNavStatus('ArUco 遺失 · 暫停','warn');
+    }
+    if(lostMs>AUTO_LOST_CANCEL_MS) cancelVisionAuto('ArUco 遺失 · AUTO 取消',false);
+  }
+
+  function processVisionFrame(W,H){
+    if(!cvReady || !cameraRunning || !W || !H) return;
+    const cv=window.cv, video=$('#cameraVideo'), overlay=$('#visionOverlay'), ctx=overlay.getContext('2d');
+    overlay.width=W;overlay.height=H;ctx.clearRect(0,0,W,H);
+    const scale=Math.min(1,VISION_PROC_W/W),pw=Math.round(W*scale),ph=Math.round(H*scale);
+    visionProcCanvas.width=pw;visionProcCanvas.height=ph;visionProcCtx.drawImage(video,0,0,pw,ph);
+    let rgba=null,gray=null,bin=null,contours=null,hier=null,K=null,distCoeffs=null;
+    let chosen=null;
+    try{
+      rgba=cv.imread(visionProcCanvas); gray=new cv.Mat(); bin=new cv.Mat();
+      cv.cvtColor(rgba,gray,cv.COLOR_RGBA2GRAY);
+      cv.adaptiveThreshold(gray,bin,255,cv.ADAPTIVE_THRESH_MEAN_C,cv.THRESH_BINARY_INV,23,7);
+      contours=new cv.MatVector();hier=new cv.Mat();cv.findContours(bin,contours,hier,cv.RETR_LIST,cv.CHAIN_APPROX_SIMPLE);
+      const cands=[],minPer=4*Math.max(18,0.03*pw);
+      for(let i=0;i<contours.size();i++){
+        const cnt=contours.get(i),per=cv.arcLength(cnt,true);
+        if(per<minPer){cnt.delete();continue;}
+        const ap=new cv.Mat();cv.approxPolyDP(cnt,ap,0.04*per,true);
+        if(ap.rows===4 && cv.isContourConvex(ap)){
+          let pts=[];for(let k=0;k<4;k++)pts.push([ap.data32S[k*2],ap.data32S[k*2+1]]);
+          let area=0;for(let k=0;k<4;k++){const a=pts[k],b=pts[(k+1)%4];area+=a[0]*b[1]-b[0]*a[1];}
+          if(area<0)pts.reverse();
+          let minSide=1e9;for(let k=0;k<4;k++){const a=pts[k],b=pts[(k+1)%4];minSide=Math.min(minSide,Math.hypot(a[0]-b[0],a[1]-b[1]));}
+          if(minSide>10)cands.push({pts,per});
+        }
+        ap.delete();cnt.delete();
+      }
+      cands.sort((a,b)=>b.per-a.per);
+      const kept=[];
+      for(const c of cands){ if(!kept.some(k=>c.pts.every(p=>k.pts.some(q=>Math.hypot(p[0]-q[0],p[1]-q[1])<0.1*k.per)))) kept.push(c); }
+      const results=[];for(const c of kept){const r=arucoDecode(gray,c.pts);if(r)results.push(r);}
+      const fov=ARUCO_FOV_DEG*Math.PI/180,f=(W/2)/Math.tan(fov/2);
+      K=cv.matFromArray(3,3,cv.CV_64F,[f,0,W/2,0,f,H/2,0,0,1]);distCoeffs=cv.Mat.zeros(4,1,cv.CV_64F);
+      const markers=[];
+      for(const r of results){
+        const corners=r.corners.map(p=>[p[0]/scale,p[1]/scale]);
+        const pose=arucoEstimatePose(corners,K,distCoeffs,ARUCO_MARKER_MM);
+        const m={id:r.id,corners,pose};markers.push(m);drawVisionMarker(ctx,m);
+      }
+      chosen=markers.find(m=>m.id===0) || markers[0] || null;
+      if(chosen){
+        visionLastMarker=chosen;visionLastSeenAt=performance.now();updateVisionReadout(chosen);updateVisionAuto(chosen);
+      }else handleVisionMarkerLost(performance.now());
+      drawVisionTarget(ctx,chosen);
+    }catch(e){
+      setVisionNavStatus('CV error','danger');
+      log('err','ArUco CV: '+e.message);
+    }finally{
+      [rgba,gray,bin,contours,hier,K,distCoeffs].forEach(m=>{if(m)try{m.delete();}catch(_){}});
+    }
+  }
+
+  function visionLoop(ts){
+    if(cameraRunning && cvReady && ts-lastVisionFrameAt>=VISION_INTERVAL_MS){
+      lastVisionFrameAt=ts;
+      const v=$('#cameraVideo'); if(v && v.readyState>=2) processVisionFrame(v.videoWidth,v.videoHeight);
+    }
+    requestAnimationFrame(visionLoop);
+  }
+
+  function setCvReady(){
+    if(cvReady) return;cvReady=true;
+    const el=$('#cvStatus');if(el){el.textContent='OpenCV 就緒';el.classList.remove('warn');el.classList.add('ok');}
+  }
+
+  function loadOpenCv(){
+    if(window.cv && window.cv.Mat){setCvReady();return;}
+    const s=document.createElement('script');s.src='https://docs.opencv.org/4.x/opencv.js';s.async=true;
+    s.onerror=()=>{const el=$('#cvStatus');if(el){el.textContent='OpenCV 載入失敗';el.classList.add('danger');}};
+    s.onload=()=>{
+      const wait=()=>{
+        const c=window.cv;
+        if(c && c.Mat){setCvReady();return;}
+        if(c && typeof c.then==='function'){c.then(m=>{window.cv=m;setCvReady();}).catch(()=>{});return;}
+        if(c && 'onRuntimeInitialized' in c){c.onRuntimeInitialized=setCvReady;return;}
+        setTimeout(wait,60);
+      };
+      wait();
+    };
+    document.head.appendChild(s);
+  }
+
+  async function startVisionCamera(){
+    const btn=$('#cameraStartBtn');
+    try{
+      if(cameraStream){ cameraRunning=true; btn.textContent='相機運作中'; return; }
+      cameraStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+      const v=$('#cameraVideo');v.srcObject=cameraStream;await v.play();cameraRunning=true;
+      btn.textContent='相機運作中';btn.classList.add('active');
+      setVisionNavStatus('點畫面設定目標');
+      if(!cameraLoopStarted){cameraLoopStarted=true;requestAnimationFrame(visionLoop);}
+    }catch(e){setVisionNavStatus('無法開啟相機','danger');log('err','Camera: '+e.message);}
+  }
+
+  function stagePointToVideo(clientX,clientY){
+    const stage=$('#cameraStage'),v=$('#cameraVideo');
+    if(!v || !v.videoWidth || !v.videoHeight)return null;
+    const r=stage.getBoundingClientRect();
+    const scale=Math.min(r.width/v.videoWidth,r.height/v.videoHeight);
+    const drawW=v.videoWidth*scale,drawH=v.videoHeight*scale;
+    const ox=(r.width-drawW)/2,oy=(r.height-drawH)/2;
+    const x=(clientX-r.left-ox)/scale,y=(clientY-r.top-oy)/scale;
+    if(x<0||x>v.videoWidth||y<0||y>v.videoHeight)return null;
+    return {x,y};
+  }
+
+  function setVisionTargetFromEvent(e){
+    if(e.target.closest('.camera-joystick') || e.target.closest('.vision-tools')) return;
+    if(!cameraRunning || !cvReady) return;
+    const p=stagePointToVideo(e.clientX,e.clientY);if(!p)return;
+    visionTarget=p;visionTargetReached=false;visionArriveFrames=0;
+    if(!isBluetoothConnected() || !controlReady){visionAutoActive=false;setVisionNavStatus('目標已設定 · BLE 未就緒','warn');return;}
+    if(telemetry.armed!==1){visionAutoActive=false;setVisionNavStatus('目標已設定 · 飛機尚未 ARMED','warn');return;}
+    if(!visionLastMarker || performance.now()-visionLastSeenAt>350){visionAutoActive=false;setVisionNavStatus('目標已設定 · ArUco 未鎖定','warn');return;}
+    visionAutoActive=true;visionLostNeutralized=false;
+    $('#cameraAutoStopBtn').classList.remove('hidden');
+    setVisionNavStatus('AUTO 啟動','ok');
   }
 
   document.querySelectorAll('[data-aux]').forEach(btn=>btn.addEventListener('click',()=>setAux(btn.dataset.aux)));
@@ -1202,11 +1591,18 @@
 
   makeJoystick($('#leftJoystick'),'left');
   makeJoystick($('#rightJoystick'),'right');
+  makeJoystick($('#cameraLeftJoystick'),'left');
+  makeJoystick($('#cameraRightJoystick'),'right');
+
+  $('#cameraStartBtn').addEventListener('click',startVisionCamera);
+  $('#cameraAutoStopBtn').addEventListener('click',e=>{e.stopPropagation();cancelVisionAuto('AUTO 已停止',false);});
+  $('#cameraStage').addEventListener('click',setVisionTargetFromEvent);
 
   $('#connectBtn').addEventListener('click',connectBluetooth);
   $('#disconnectBtn').addEventListener('click',disconnectBluetooth);
   $('#pairBtn').addEventListener('click',async ()=>{
     if(pairInProgress) return;
+    cancelVisionAuto('PAIR：AUTO 停止',false);
     if(pairFailTimer){ clearTimeout(pairFailTimer); pairFailTimer = null; }
     updatePairButton('pairing');
     log('sys','PAIR requested');
@@ -1245,6 +1641,7 @@
     startUnlockWatchdog();
   });
   $('#estopBtn').addEventListener('click',()=>{
+    cancelVisionAuto('緊急停機：AUTO 停止',true);
     clearUnlockTimers();
     unlockInProgress = false;
     unlockResetState = false;
@@ -1254,8 +1651,8 @@
     log('sys','EMERGENCY STOP requested');
     sendLine('E');
   });
-  $('#neutralBtn').addEventListener('click',resetControls);
-  $('#resetBtn').addEventListener('click',resetControls);
+  $('#neutralBtn').addEventListener('click',()=>{cancelVisionAuto('全部中立',true);resetControls();});
+  $('#resetBtn').addEventListener('click',()=>{cancelVisionAuto('介面復位',true);resetControls();});
   $('#pingBtn').addEventListener('click',()=>sendLine('Q'));
 
   $('#streamToggle').addEventListener('click',e=>{ streamEnabled=!streamEnabled; e.currentTarget.classList.toggle('on',streamEnabled); e.currentTarget.textContent=streamEnabled?'100 ms':'OFF'; });
@@ -1310,7 +1707,11 @@
     setDebugConsoleVisible(false);
     setDebugStreamEnabled(false);
     setAttitudeStreamEnabled(false);
-    setTimeout(()=>{ setStick($('#leftJoystick'),0,1); setStick($('#rightJoystick'),0,0); },50);
+    loadOpenCv();
+    setTimeout(()=>{
+      setStick($('#leftJoystick'),0,1); setStick($('#rightJoystick'),0,0);
+      setStick($('#cameraLeftJoystick'),0,1); setStick($('#cameraRightJoystick'),0,0);
+    },50);
     render();
     updatePairButton('idle');
     updateArmScreen();
