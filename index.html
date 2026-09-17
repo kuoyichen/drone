@@ -27,6 +27,9 @@
   .grid{display:grid;grid-template-columns:minmax(720px,1.7fr) minmax(330px,.8fr);gap:16px;margin-top:16px}
   .card{background:linear-gradient(150deg,#10243d,#0b1829);border:1px solid var(--line);border-radius:18px;box-shadow:0 18px 50px #0005}
   .remote-card{padding:16px;overflow:auto}
+  .remote-mode-bar{display:flex;align-items:center;gap:10px;margin-bottom:10px;color:#a9c8df;font-size:12px}
+  .remote-mode-bar button{border:1px solid #4b7194;background:#071522;color:#eaf4ff;border-radius:9px;padding:8px 12px;font-size:13px;cursor:pointer}
+  .remote-mode-bar button.active{border-color:#52d39d;background:#0e4939;color:#caffea}
   .remote-shell{position:relative;min-width:720px;aspect-ratio:1.48/1;background:linear-gradient(155deg,#07539b,#0a6bc0 50%,#064a8f);border:4px solid #0e3156;border-radius:120px 120px 190px 190px;overflow:hidden;box-shadow:inset 0 0 0 2px #0e80df, inset 0 -30px 70px #001f4275, 0 20px 50px #0007}
   .remote-shell::before{content:"";position:absolute;inset:8%;border:1px dashed #9dd9ff40;border-radius:70px;pointer-events:none}
   .pcb-label{position:absolute;font-size:12px;color:#d8efff;opacity:.88;text-align:center;line-height:1.2}
@@ -110,7 +113,7 @@
   .vision-hud{position:absolute;left:10px;top:10px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;max-width:72%;pointer-events:none}
   .vision-pill{background:#020b13cc;border:1px solid #315b7ecc;border-radius:999px;padding:5px 8px;color:#d8efff;font:11px ui-monospace,Consolas,monospace;backdrop-filter:blur(4px)}
   .vision-pill.ok{border-color:#2e8c70;color:#b9f7dd}.vision-pill.warn{border-color:#9a7720;color:#ffe29a}.vision-pill.danger{border-color:#a63d56;color:#ffc0cc}
-  .vision-tools{position:absolute;right:10px;top:10px;z-index:6;display:flex;gap:7px}
+  .vision-tools{position:absolute;right:10px;top:10px;z-index:6;display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;max-width:60%}
   .vision-tools button{border:1px solid #4b7194;background:#071522d9;color:#eaf4ff;border-radius:9px;padding:7px 10px;font-size:12px;cursor:pointer;backdrop-filter:blur(4px)}
   .vision-tools button.active{border-color:#52d39d;background:#0e4939dd;color:#caffea}
   .vision-tools button.stop{border-color:#c34c63;background:#661c2bdd;color:#ffe1e7}
@@ -155,6 +158,7 @@
       <div class="vision-tools">
         <button id="cameraStartBtn">啟動相機</button>
         <button id="cameraPositionHoldBtn" data-aux="aux1" type="button" aria-pressed="true">定點定高：開</button>
+        <button id="cameraOpticalFlowBtn" data-aux="aux1" data-mode-label="光流定點" type="button" aria-pressed="true" title="與定點定高共用 AUX1 模式">光流定點：開</button>
         <button id="cameraAutoStopBtn" class="stop hidden">停止自動</button>
       </div>
 
@@ -166,6 +170,7 @@
 
   <div class="grid">
     <div class="card remote-card">
+      <div class="remote-mode-bar"><button id="remoteOpticalFlowBtn" data-aux="aux1" data-mode-label="光流定點" type="button" aria-pressed="true" title="與定點定高共用 AUX1 模式">光流定點：開</button><span>與定點定高共用 AUX1 模式</span></div>
       <div class="remote-shell">
         <div class="pcb-label aux2l">AUX2 · PB8<br>一鍵翻滾</div>
         <button class="control-btn aux2" data-aux="aux2">A2</button>
@@ -409,7 +414,7 @@
 
   const rc = {
     thr: 1000, yaw: 1500, roll: 1500, pitch: 1500,
-    aux1: 2000, aux2: 1000, aux3: 1000, aux4: 1000, aux5: 1000, aux6: 1000
+    aux1: 1000, aux2: 1000, aux3: 1000, aux4: 1000, aux5: 1000, aux6: 1000
   };
   let trimPitch = 0;
   let trimRoll = 0;
@@ -928,11 +933,12 @@
     $('#vPitch').textContent = view.pitch;
     $('#vAux1').textContent = view.aux1;
     document.querySelectorAll('[data-aux="aux1"]').forEach(button=>{
-      const enabled = view.aux1 === 2000;
+      const enabled = view.aux1 < 1700;
+      const label = button.dataset.modeLabel || '定點定高';
       button.classList.toggle('active', enabled);
       button.setAttribute('aria-pressed', String(enabled));
-      button.setAttribute('aria-label', `定點定高：${enabled ? '開' : '關'}`);
-      button.textContent = button.id === 'cameraPositionHoldBtn' ? `定點定高：${enabled ? '開' : '關'}` : '定點定高';
+      button.setAttribute('aria-label', `${label}：${enabled ? '開' : '關'}`);
+      button.textContent = button.classList.contains('control-btn') ? label : `${label}：${enabled ? '開' : '關'}`;
     });
     $('#vAux2').textContent = view.aux2;
     $('#vAux3').textContent = view.aux3;
@@ -1202,14 +1208,13 @@
 
   function setAux(name){
     rc[name] = rc[name] >= 1500 ? 1000 : 2000;
-    document.querySelectorAll(`[data-aux="${name}"]`).forEach(button=>button.classList.toggle('active', rc[name] === 2000));
     render();
     sendLine(auxCompactLine(name));
   }
 
   function resetControls(){
     rc.thr = 1000; rc.yaw = 1500; rc.roll = 1500; rc.pitch = 1500;
-    rc.aux1 = 2000;
+    rc.aux1 = 1000;
     rc.aux2 = rc.aux3 = rc.aux4 = rc.aux5 = rc.aux6 = 1000;
     trimPitch = 0; trimRoll = 0;
     document.querySelectorAll('[data-aux]').forEach(b=>b.classList.remove('active'));
