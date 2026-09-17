@@ -200,7 +200,9 @@
         <div class="switch-row"><span>瀏覽器送 RC 更新</span><button id="streamToggle" class="mini-toggle on">100 ms</button></div>
         <div class="switch-row"><span>Roll / Pitch 對調</span><button id="swapToggle" class="mini-toggle">OFF</button></div>
         <div class="switch-row"><span>左搖桿放開保留油門</span><button id="throttleHoldToggle" class="mini-toggle on">ON</button></div>
-        <div class="switch-row"><span>輸出 UART TX 到 Log</span><button id="txLogToggle" class="mini-toggle on">ON</button></div>
+        <div class="switch-row"><span>顯示 Debug 訊息</span><button id="debugStreamToggle" class="mini-toggle">OFF</button></div>
+        <div class="switch-row"><span>回傳飛機姿態</span><button id="attitudeStreamToggle" class="mini-toggle">OFF</button></div>
+        <div class="switch-row"><span>輸出 Browser TX 到 Log</span><button id="txLogToggle" class="mini-toggle on">ON</button></div>
       </div>
 
       <div class="modal-tip">第一次做姿態控制仍建議拆槳驗證。右搖桿的 Roll/Pitch 在原專案存在欄位命名交叉，因此這裡保留「Roll / Pitch 對調」開關供實機確認。</div>
@@ -211,11 +213,10 @@
     <div class="telemetry-head">
       <div class="section-title">無人機 Telemetry / Ground Station</div>
       <button id="clearTelemetry" class="btn secondary">清除 Telemetry</button>
-      <div class="sub-options" title="勾選項目只控制 micro:bit 轉送到 USB；無人機端仍依原韌體固定循環送 ACK Payload">
-        <label class="sub-chip"><input type="checkbox" data-sub="ATT" checked>姿態 / 模式</label>
-        <label class="sub-chip"><input type="checkbox" data-sub="PWR" checked>電源 / NRF</label>
-        <label class="sub-chip"><input type="checkbox" data-sub="ALT" checked>高度</label>
-        <label class="sub-chip"><input type="checkbox" data-sub="FLOW" checked>光流位置</label>
+      <div class="sub-options" title="這些選項會命令 micro:bit 決定哪些飛機資料要經 BLE UART 傳回；姿態由右側控制選項的「回傳飛機姿態」控制">
+        <label class="sub-chip"><input type="checkbox" data-sub="PWR">電源 / NRF</label>
+        <label class="sub-chip"><input type="checkbox" data-sub="ALT">高度</label>
+        <label class="sub-chip"><input type="checkbox" data-sub="FLOW">光流位置</label>
         <label class="sub-chip"><input type="checkbox" data-sub="IMU">IMU / 光流原始</label>
         <label class="sub-chip"><input type="checkbox" data-sub="RC">飛機 RC Echo</label>
         <label class="sub-chip" title="BLE UART 由 micro:bit 端自動切成 20-byte notifications；RAW ACK 在 BLE 版本停用"><input type="checkbox" data-sub="RAW" disabled>RAW ACK（BLE停用）</label>
@@ -290,7 +291,7 @@
       建議協定：Browser → micro:bit 使用一行一命令並以 <code>\n</code> 結尾。<br>
       BLE 內部優先使用 compact protocol：<code>R + 10×4-digit RC</code>、<code>P</code>=PAIR、<code>U</code>=UNLOCK、<code>E</code>=ESTOP、<code>Q</code>=PING。<br>舊版 <code>RC,...</code> / <code>CMD,...</code> 仍可由 micro:bit 相容解析。<br>
       micro:bit → Browser 可回傳 <code>STATE,CH,37</code>、<code>STATE,ACK,1</code>、<code>DBG,...</code>；飛機 ACK Payload 會轉成 <code>TEL,ATT</code>、<code>TEL,PWR</code>、<code>TEL,ALT</code> 等資料並顯示在上方 Ground Station。<br>
-      Telemetry 勾選框透過 <code>SUB,類型,0|1</code> 控制 micro:bit → Bluetooth 的轉送量；不會改變飛機端原本的 ACK Payload 循環。<br>
+      「顯示 Debug 訊息」會送 <code>D0/D1</code>，直接控制 micro:bit 是否產生 <code>DBG,...</code>；「回傳飛機姿態」與 Telemetry 選項會送 compact subscription mask，直接控制 micro:bit 哪些資料要經 BLE UART 傳回。飛機端原本的 ACK Payload 循環不變。<br>
       BLE UART Service: <code>6e400001-b5a3-f393-e0a9-e50e24dcca9e</code><br>
       micro:bit → Browser TX: <code>6e400002-b5a3-f393-e0a9-e50e24dcca9e</code>；Browser → micro:bit RX: <code>6e400003-b5a3-f393-e0a9-e50e24dcca9e</code>。
       </div>
@@ -328,6 +329,8 @@
   let swapRollPitch = false;
   let throttleHold = true;
   let txLogEnabled = true;
+  let debugStreamEnabled = false;
+  let attitudeStreamEnabled = false;
   let telemetryConsoleVisible = false;
   let debugConsoleVisible = false;
   let telemetryCount = 0;
@@ -752,17 +755,20 @@
     }else if(type==='FLOW' && p.length>=5){
       telemetry.flowX=Number(p[2]); telemetry.flowY=Number(p[3]); telemetry.flowZ=Number(p[4]);
     }
-    renderTelemetry();
+    if(type === 'ATT'){
+      if(attitudeStreamEnabled) renderTelemetry();
+    }else if(telemetryConsoleVisible){
+      renderTelemetry();
+    }
   }
 
   function setTelemetryConsoleVisible(show){
     telemetryConsoleVisible = !!show;
     $('#telemetryConsoleBody').classList.toggle('hidden', !telemetryConsoleVisible);
     $('#toggleTelemetryConsole').textContent = telemetryConsoleVisible ? '隱藏' : '顯示';
-    $('#attitudePaused').classList.toggle('hidden', telemetryConsoleVisible);
 
-    // 隱藏時不只停止 DOM / 姿態儀，也通知 micro:bit 停止一般 Telemetry BLE 轉送。
-    // ARM 狀態由獨立的 STATE,ARM 事件維持，不受此開關影響。
+    // Console 顯示只控制一般 Telemetry 類型；姿態由獨立的「回傳飛機姿態」開關控制。
+    // ARM 狀態由獨立的 STATE,ARM 事件維持，不受這些開關影響。
     if(isBluetoothConnected()) sendSubscriptionMask();
 
     if(telemetryConsoleVisible){
@@ -781,23 +787,46 @@
   }
 
   function currentSubscriptionMask(){
-    if(!telemetryConsoleVisible) return 0;
     let mask = 0;
-    document.querySelectorAll('[data-sub]').forEach(box=>{
-      if(!box.checked) return;
-      if(box.dataset.sub === 'ATT') mask |= 0x01;
-      else if(box.dataset.sub === 'PWR') mask |= 0x02;
-      else if(box.dataset.sub === 'ALT') mask |= 0x04;
-      else if(box.dataset.sub === 'FLOW') mask |= 0x08;
-      else if(box.dataset.sub === 'IMU') mask |= 0x10;
-      else if(box.dataset.sub === 'RC') mask |= 0x20;
-    });
+
+    // 姿態傳輸與 Telemetry Console 顯示分離。開啟時 micro:bit 才傳 TEL,ATT。
+    if(attitudeStreamEnabled) mask |= 0x01;
+
+    // 其餘較大量的遙測只有在 Telemetry Console 顯示時才允許 micro:bit 傳回。
+    if(telemetryConsoleVisible){
+      document.querySelectorAll('[data-sub]').forEach(box=>{
+        if(!box.checked) return;
+        if(box.dataset.sub === 'PWR') mask |= 0x02;
+        else if(box.dataset.sub === 'ALT') mask |= 0x04;
+        else if(box.dataset.sub === 'FLOW') mask |= 0x08;
+        else if(box.dataset.sub === 'IMU') mask |= 0x10;
+        else if(box.dataset.sub === 'RC') mask |= 0x20;
+      });
+    }
     return mask;
   }
 
   async function sendSubscriptionMask(){
     if(!isBluetoothConnected()) return false;
     return await sendLine('S' + currentSubscriptionMask());
+  }
+
+  async function setDebugStreamEnabled(enable){
+    debugStreamEnabled = !!enable;
+    const btn = $('#debugStreamToggle');
+    btn.classList.toggle('on', debugStreamEnabled);
+    btn.textContent = debugStreamEnabled ? 'ON' : 'OFF';
+    if(isBluetoothConnected()) await sendLine(debugStreamEnabled ? 'D1' : 'D0');
+  }
+
+  async function setAttitudeStreamEnabled(enable){
+    attitudeStreamEnabled = !!enable;
+    const btn = $('#attitudeStreamToggle');
+    btn.classList.toggle('on', attitudeStreamEnabled);
+    btn.textContent = attitudeStreamEnabled ? 'ON' : 'OFF';
+    $('#attitudePaused').classList.toggle('hidden', attitudeStreamEnabled);
+    if(isBluetoothConnected()) await sendSubscriptionMask();
+    if(attitudeStreamEnabled) renderTelemetry();
   }
 
   function connectedUI(on){
@@ -838,7 +867,7 @@
     return ['RC', rc.thr, rc.yaw, roll, pitch, rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6].join(',');
   }
 
-  // V4.5 BLE RC 核心封包刻意限制在單一 20-byte ATT packet 內：
+  // V4.6 BLE RC 核心封包刻意限制在單一 20-byte ATT packet 內：
   // R + THR(4) + YAW(4) + ROLL(4) + PITCH(4) + newline = 18 bytes。
   // AUX 改成「有變化才單獨送」，避免每 50ms 都要拆 3 個 BLE writes。
   function rcCoreLine(){
@@ -986,15 +1015,17 @@
       connectedUI(true);
       log('sys', `Bluetooth connected: ${bleDevice.name || 'BBC micro:bit'}`);
 
-      // 連線後先保持 Telemetry 關閉，只送一個短 Q 取得目前 CH / LINK / ARM。
-      // 等 Q 完成後才開啟週期 RC，避免連線瞬間就塞滿 RX queue。
+      // 連線後先把 micro:bit 的 BLE 輸出壓到最低：Debug 預設 OFF、Telemetry 預設依目前開關（初始為 0）。
+      // 這不是 Browser 端過濾，而是直接命令 micro:bit 不要產生對應 BLE UART 訊息。
+      await sendLine(debugStreamEnabled ? 'D1' : 'D0');
+      await sendLine('S' + currentSubscriptionMask());
       await sendLine('Q');
       await sleepMs(120);
       controlReady = true;
       markRcDirty();
       lastRcSendAt = 0;
       log('sys', `BLE control write mode: ${bleWriteMode}`);
-      log('sys', 'V4.5 RC mode: change-driven + 500 ms keep-alive');
+      log('sys', 'V4.6 RC mode: change-driven + 500 ms keep-alive');
     }catch(e){
       connectedUI(false);
       log('err','Bluetooth connect failed: ' + e.message);
@@ -1230,6 +1261,8 @@
   $('#streamToggle').addEventListener('click',e=>{ streamEnabled=!streamEnabled; e.currentTarget.classList.toggle('on',streamEnabled); e.currentTarget.textContent=streamEnabled?'100 ms':'OFF'; });
   $('#swapToggle').addEventListener('click',e=>{ swapRollPitch=!swapRollPitch; e.currentTarget.classList.toggle('on',swapRollPitch); e.currentTarget.textContent=swapRollPitch?'ON':'OFF'; render(); });
   $('#throttleHoldToggle').addEventListener('click',e=>{ throttleHold=!throttleHold; e.currentTarget.classList.toggle('on',throttleHold); e.currentTarget.textContent=throttleHold?'ON':'OFF'; });
+  $('#debugStreamToggle').addEventListener('click',()=>setDebugStreamEnabled(!debugStreamEnabled));
+  $('#attitudeStreamToggle').addEventListener('click',()=>setAttitudeStreamEnabled(!attitudeStreamEnabled));
   $('#txLogToggle').addEventListener('click',e=>{ txLogEnabled=!txLogEnabled; e.currentTarget.classList.toggle('on',txLogEnabled); e.currentTarget.textContent=txLogEnabled?'ON':'OFF'; });
 
   document.querySelectorAll('[data-sub]').forEach(box=>box.addEventListener('change',()=>{
@@ -1248,7 +1281,7 @@
   $('#manualInput').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#manualSend').click(); });
 
   setInterval(()=>{
-    // V4.5 不再固定每 100 ms 重送完全相同的 RC。
+    // V4.6 不再固定每 100 ms 重送完全相同的 RC。
     // 搖桿有變化時最快約 50 ms 更新；靜止時只每 500 ms keep-alive。
     // micro:bit 仍會用最後一筆 RC 以約 4 ms 週期送給 nRF24L01。
     let now = 0;
@@ -1275,6 +1308,8 @@
   window.addEventListener('load',()=>{
     setTelemetryConsoleVisible(false);
     setDebugConsoleVisible(false);
+    setDebugStreamEnabled(false);
+    setAttitudeStreamEnabled(false);
     setTimeout(()=>{ setStick($('#leftJoystick'),0,1); setStick($('#rightJoystick'),0,0); },50);
     render();
     updatePairButton('idle');
