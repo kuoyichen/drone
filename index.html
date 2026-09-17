@@ -120,6 +120,9 @@
   .vision-tools button.stop{border-color:#c34c63;background:#661c2bdd;color:#ffe1e7}
   .vision-tools button.hidden{display:none}
   .vision-hint{position:absolute;left:50%;bottom:7px;transform:translateX(-50%);z-index:3;background:#020b1399;border:1px solid #315b7e88;border-radius:999px;padding:5px 10px;color:#d8efff;font-size:11px;pointer-events:none;white-space:nowrap}
+  .throttle-stable-btn{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:8;border:1px solid #6f9ac0;border-radius:12px;background:#092b47e8;color:#eaf4ff;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+  .throttle-stable-btn.active{border-color:#52d39d;background:#0e4939ee;color:#caffea}
+  .camera-stage .vision-hint{bottom:55px}
   .camera-joystick{z-index:7!important;width:min(clamp(134px,21.6vw,202px),calc(50% - 12px))!important;height:auto!important;aspect-ratio:1;top:auto!important;bottom:4%!important;opacity:.56;backdrop-filter:blur(1px);transition:opacity .15s;box-shadow:inset 0 0 28px #000a,0 8px 20px #0008!important}
   .camera-joystick:active{opacity:.78}
   .camera-joystick .stick{width:40%!important;height:40%!important;border-width:2px!important}
@@ -167,6 +170,7 @@
 
       <div id="cameraLeftJoystick" class="joystick camera-joystick camera-left-stick"><div class="stick"></div></div>
       <div id="cameraRightJoystick" class="joystick camera-joystick camera-right-stick"><div class="stick"></div></div>
+      <button id="cameraThrottleStableBtn" class="throttle-stable-btn" type="button" aria-pressed="false">油門穩定</button>
       <div class="vision-hint">辨識 ArUco 後，點畫面設定目的地；手動碰任一搖桿會立即退出自動導航</div>
     </div>
   </div>
@@ -449,6 +453,7 @@
   let visionLastMarker = null;
   let visionLastSeenAt = 0;
   let visionLostNeutralized = false;
+  let throttleStableActive = false;
 
   const $ = s => document.querySelector(s);
   const logEl = $('#log');
@@ -465,6 +470,18 @@
   function markRcDirty(){
     rcDirty = true;
     rcRevision++;
+  }
+  function updateThrottleStableButton(){
+    const button = $('#cameraThrottleStableBtn');
+    if(!button) return;
+    button.classList.toggle('active', throttleStableActive);
+    button.setAttribute('aria-pressed', String(throttleStableActive));
+    button.textContent = throttleStableActive ? `油門穩定：${rc.thr}` : '油門穩定';
+  }
+  function cancelThrottleStable(){
+    if(!throttleStableActive) return;
+    throttleStableActive = false;
+    updateThrottleStableButton();
   }
   function sendCurrentRc(){
     const revision = rcRevision;
@@ -708,6 +725,7 @@
   }
 
   async function forceThrottleMinimum(reason, transmit = true){
+    cancelThrottleStable();
     rc.thr = 1000;
     markRcDirty();
     const left = $('#leftJoystick');
@@ -950,6 +968,7 @@
   function connectedUI(on){
     bleConnected = !!on;
     if(!bleConnected){ flowStatusAt.att=0; flowStatusAt.imu=0; flowStatusAt.pwr=0; }
+    if(!bleConnected) cancelThrottleStable();
     $('#statusDot').classList.toggle('on', bleConnected);
     $('#serialStatus').textContent = bleConnected ? 'Bluetooth 已連線' : 'Bluetooth 未連線';
     $('#screenLink').textContent = bleConnected ? 'BLE' : 'OFF';
@@ -1250,6 +1269,7 @@
   }
 
   function resetControls(){
+    cancelThrottleStable();
     rc.thr = 1000; rc.yaw = 1500; rc.roll = 1500; rc.pitch = 1500;
     rc.aux1 = 1000;
     rc.aux2 = rc.aux3 = rc.aux4 = rc.aux5 = rc.aux6 = 1000;
@@ -1276,12 +1296,14 @@
       const maxR = r.width*0.33;
       let dx = clientX - cx, dy = clientY - cy;
       const mag = Math.hypot(dx,dy);
-      if(mag > maxR){ dx = dx/mag*maxR; dy = dy/mag*maxR; }
+      // 左搖桿維持原本的圓形行程；右搖桿兩軸各自限幅，避免斜向時一軸拖動另一軸。
+      if(type === 'left' && mag > maxR){ dx = dx/mag*maxR; dy = dy/mag*maxR; }
       const x = clamp(dx/maxR,-1,1), y = clamp(dy/maxR,-1,1);
       lastX = x; lastY = y;
       setStick(el,x,y);
       syncStickMirrors(type,x,y,el);
       if(type === 'left'){
+        cancelThrottleStable();
         rc.yaw = ch(1500 + x*500);
         rc.thr = ch(1500 - y*500);
       }else{
@@ -1304,6 +1326,7 @@
       if(type === 'right'){
         rc.roll=1500; rc.pitch=1500; setStick(el,0,0); syncStickMirrors('right',0,0,el);
       }else{
+        cancelThrottleStable();
         rc.yaw=1500;
         if(throttleHold){ setStick(el,0,lastY); syncStickMirrors('left',0,lastY,el); }
         else { rc.thr=1000; setStick(el,0,1); syncStickMirrors('left',0,1,el); }
@@ -1314,7 +1337,7 @@
     });
     el.addEventListener('dblclick', ()=>{
       if(visionAutoActive) cancelVisionAuto('手動搖桿接管', false);
-      if(type === 'left'){ rc.thr=1000; rc.yaw=1500; setStick(el,0,1); syncStickMirrors('left',0,1,el); }
+      if(type === 'left'){ cancelThrottleStable(); rc.thr=1000; rc.yaw=1500; setStick(el,0,1); syncStickMirrors('left',0,1,el); }
       else { rc.roll=1500; rc.pitch=1500; setStick(el,0,0); syncStickMirrors('right',0,0,el); }
       render(); markRcDirty();
       sendCurrentRc();
@@ -1649,6 +1672,13 @@
   makeJoystick($('#cameraRightJoystick'),'right');
 
   $('#cameraStartBtn').addEventListener('click',startVisionCamera);
+  $('#cameraThrottleStableBtn').addEventListener('click',e=>{
+    e.stopPropagation();
+    throttleStableActive = !throttleStableActive;
+    updateThrottleStableButton();
+    markRcDirty();
+    sendCurrentRc();
+  });
   $('#cameraFullscreenBtn').addEventListener('click',async ()=>{
     try{
       const stage = $('#cameraStage');
