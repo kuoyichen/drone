@@ -107,6 +107,7 @@
   /* ===== V5 Camera / ArUco flight view ===== */
   .vision-card{margin-top:16px;padding:12px}
   .camera-stage{position:relative;width:100%;aspect-ratio:16/9;min-height:260px;max-height:72vh;background:#02060b;border:1px solid #315b7e;border-radius:16px;overflow:hidden;cursor:crosshair;touch-action:none;box-shadow:inset 0 0 40px #000a}
+  .camera-stage:fullscreen{width:100vw;height:100vh;max-height:none;min-height:0;aspect-ratio:auto;border:0;border-radius:0}
   .camera-stage video,.camera-stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
   #visionOverlay{z-index:2;pointer-events:none}
   #cameraVideo{z-index:1;background:#000}
@@ -157,6 +158,7 @@
       </div>
       <div class="vision-tools">
         <button id="cameraStartBtn">啟動相機</button>
+        <button id="cameraFullscreenBtn" type="button" aria-pressed="false">全螢幕</button>
         <button id="cameraPositionHoldBtn" data-aux="aux1" type="button" aria-pressed="true">定點定高：開</button>
         <button id="cameraOpticalFlowBtn" data-aux="aux1" data-mode-label="光流定點" type="button" aria-pressed="true" title="與定點定高共用 AUX1 模式">光流定點：開</button>
         <button id="cameraAutoStopBtn" class="stop hidden">停止自動</button>
@@ -1611,6 +1613,20 @@
   makeJoystick($('#cameraRightJoystick'),'right');
 
   $('#cameraStartBtn').addEventListener('click',startVisionCamera);
+  $('#cameraFullscreenBtn').addEventListener('click',async ()=>{
+    try{
+      const stage = $('#cameraStage');
+      if(document.fullscreenElement === stage) await document.exitFullscreen();
+      else if(stage.requestFullscreen) await stage.requestFullscreen();
+      else log('err','此瀏覽器不支援相機視窗全螢幕');
+    }catch(e){ log('err','切換相機全螢幕失敗：' + e.message); }
+  });
+  document.addEventListener('fullscreenchange',()=>{
+    const active = document.fullscreenElement === $('#cameraStage');
+    const button = $('#cameraFullscreenBtn');
+    button.textContent = active ? '退出全螢幕' : '全螢幕';
+    button.setAttribute('aria-pressed', String(active));
+  });
   $('#cameraAutoStopBtn').addEventListener('click',e=>{e.stopPropagation();cancelVisionAuto('AUTO 已停止',false);});
   $('#cameraStage').addEventListener('click',setVisionTargetFromEvent);
 
