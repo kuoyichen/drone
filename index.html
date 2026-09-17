@@ -316,6 +316,11 @@
   let bleWriteChain = Promise.resolve();
   let bleWriteMode = "unknown";
   let blePeriodicRcBusy = false;
+  let rcDirty = true;
+  let rcRevision = 0;
+  let lastRcSendAt = 0;
+  const RC_IDLE_HEARTBEAT_MS = 500;
+  const RC_ACTIVE_TICK_MS = 50;
   let rxBuffer = '';
   let txCount = 0;
   let rxCount = 0;
@@ -343,7 +348,7 @@
   const UNLOCK_TIMEOUT_MS = 5000;
   const UNLOCK_RESET_SHOW_MS = 1200;
   const PAIR_TIMEOUT_MS = 12000;
-  const COMMAND_ACK_TIMEOUT_MS = 650;
+  const COMMAND_ACK_TIMEOUT_MS = 1200;
   const telemetry = {
     roll:0, pitch:0, yaw:0, attAltRaw:0, mode:null, armed:null,
     voltageRaw:null, nrfSsi:null, sensorFlags:null, setFlags:null,
@@ -369,6 +374,11 @@
   function stamp(){ const d = new Date(); return d.toLocaleTimeString('zh-TW',{hour12:false}) + '.' + String(d.getMilliseconds()).padStart(3,'0'); }
 
   function sleepMs(ms){ return new Promise(resolve=>setTimeout(resolve,ms)); }
+
+  function markRcDirty(){
+    rcDirty = true;
+    rcRevision++;
+  }
 
   function clearPendingCommandAck(result){
     if(pendingCommandTimer){ clearTimeout(pendingCommandTimer); pendingCommandTimer = null; }
@@ -602,6 +612,7 @@
 
   async function forceThrottleMinimum(reason, transmit = true){
     rc.thr = 1000;
+    markRcDirty();
     const left = $('#leftJoystick');
     if(left){
       const yawX = clamp((rc.yaw - 1500) / 500, -1, 1);
@@ -827,7 +838,7 @@
     return ['RC', rc.thr, rc.yaw, roll, pitch, rc.aux1, rc.aux2, rc.aux3, rc.aux4, rc.aux5, rc.aux6].join(',');
   }
 
-  // V4.4 BLE RC 核心封包刻意限制在單一 20-byte ATT packet 內：
+  // V4.5 BLE RC 核心封包刻意限制在單一 20-byte ATT packet 內：
   // R + THR(4) + YAW(4) + ROLL(4) + PITCH(4) + newline = 18 bytes。
   // AUX 改成「有變化才單獨送」，避免每 50ms 都要拆 3 個 BLE writes。
   function rcCoreLine(){
@@ -980,7 +991,10 @@
       await sendLine('Q');
       await sleepMs(120);
       controlReady = true;
+      markRcDirty();
+      lastRcSendAt = 0;
       log('sys', `BLE control write mode: ${bleWriteMode}`);
+      log('sys', 'V4.5 RC mode: change-driven + 500 ms keep-alive');
     }catch(e){
       connectedUI(false);
       log('err','Bluetooth connect failed: ' + e.message);
@@ -1083,6 +1097,7 @@
     setStick($('#leftJoystick'), 0, 1);   // bottom: throttle min
     setStick($('#rightJoystick'), 0, 0);  // centered
     render();
+    markRcDirty();
     sendLine(rcCoreLine());
     syncAllAux();
   }
@@ -1110,6 +1125,7 @@
         rc.pitch = ch(1500 - y*500);
       }
       render();
+      markRcDirty();
     }
 
     el.addEventListener('pointerdown', e=>{ active=true; el.setPointerCapture(e.pointerId); apply(e.clientX,e.clientY); });
@@ -1125,12 +1141,14 @@
         else { rc.thr=1000; setStick(el,0,1); }
       }
       render();
-      sendLine(rcCoreLine());
+      markRcDirty();
+      sendLine(rcCoreLine()).then(ok=>{ if(ok){ lastRcSendAt = Date.now(); rcDirty = false; } });
     });
     el.addEventListener('dblclick', ()=>{
       if(type === 'left'){ rc.thr=1000; rc.yaw=1500; setStick(el,0,1); }
       else { rc.roll=1500; rc.pitch=1500; setStick(el,0,0); }
-      render(); sendLine(rcCoreLine());
+      render(); markRcDirty();
+      sendLine(rcCoreLine()).then(ok=>{ if(ok){ lastRcSendAt = Date.now(); rcDirty = false; } });
     });
   }
 
@@ -1148,7 +1166,7 @@
     if(t==='pitch-') trimPitch=clamp(trimPitch-10,-200,200);
     if(t==='roll+') trimRoll=clamp(trimRoll+10,-200,200);
     if(t==='roll-') trimRoll=clamp(trimRoll-10,-200,200);
-    log('sys',`TRIM pitch=${trimPitch} roll=${trimRoll}`); render(); sendLine(rcCoreLine());
+    log('sys',`TRIM pitch=${trimPitch} roll=${trimRoll}`); render(); markRcDirty(); sendLine(rcCoreLine());
   }));
 
   makeJoystick($('#leftJoystick'),'left');
@@ -1230,17 +1248,29 @@
   $('#manualInput').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#manualSend').click(); });
 
   setInterval(()=>{
-    // V4.4 核心 RC 含 newline 只有 18 bytes，單一 ATT write 即可完成。
-    // 若前一個週期尚未送完，就略過這一拍，不累積舊 RC。
-    // PAIR / UNLOCK 期間也暫停週期 RC，讓控制命令優先。
+    // V4.5 不再固定每 100 ms 重送完全相同的 RC。
+    // 搖桿有變化時最快約 50 ms 更新；靜止時只每 500 ms keep-alive。
+    // micro:bit 仍會用最後一筆 RC 以約 4 ms 週期送給 nRF24L01。
+    let now = 0;
+    let revision = 0;
+
     if(!streamEnabled || !isBluetoothConnected() || !controlReady) return;
     if(blePeriodicRcBusy || pairInProgress || unlockInProgress || unlockResetState || pendingCommandKey) return;
 
+    now = Date.now();
+    if(!rcDirty && (now - lastRcSendAt) < RC_IDLE_HEARTBEAT_MS) return;
+
+    revision = rcRevision;
     blePeriodicRcBusy = true;
-    sendLine(rcCoreLine()).finally(()=>{
+    sendLine(rcCoreLine()).then(ok=>{
+      if(ok){
+        lastRcSendAt = Date.now();
+        if(revision === rcRevision) rcDirty = false;
+      }
+    }).finally(()=>{
       blePeriodicRcBusy = false;
     });
-  },100);
+  },RC_ACTIVE_TICK_MS);
 
   window.addEventListener('load',()=>{
     setTelemetryConsoleVisible(false);
