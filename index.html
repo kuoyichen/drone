@@ -376,7 +376,7 @@
   let rcRevision = 0;
   let lastRcSendAt = 0;
   const RC_IDLE_HEARTBEAT_MS = 500;
-  const RC_ACTIVE_TICK_MS = 50;
+  const RC_ACTIVE_TICK_MS = 20;
   let rxBuffer = '';
   let txCount = 0;
   let rxCount = 0;
@@ -463,6 +463,15 @@
   function markRcDirty(){
     rcDirty = true;
     rcRevision++;
+  }
+  function sendCurrentRc(){
+    const revision = rcRevision;
+    sendLine(rcCoreLine()).then(ok=>{
+      if(ok){
+        lastRcSendAt = Date.now();
+        if(revision === rcRevision) rcDirty = false;
+      }
+    });
   }
 
   function clearPendingCommandAck(result){
@@ -1260,6 +1269,7 @@
     el.addEventListener('pointerdown', e=>{
       if(visionAutoActive) cancelVisionAuto('手動搖桿接管', false);
       active=true; el.setPointerCapture(e.pointerId); apply(e.clientX,e.clientY);
+      sendCurrentRc();
     });
     el.addEventListener('pointermove', e=>{ if(active) apply(e.clientX,e.clientY); });
     el.addEventListener('pointerup', e=>{
@@ -1274,14 +1284,14 @@
       }
       render();
       markRcDirty();
-      sendLine(rcCoreLine()).then(ok=>{ if(ok){ lastRcSendAt = Date.now(); rcDirty = false; } });
+      sendCurrentRc();
     });
     el.addEventListener('dblclick', ()=>{
       if(visionAutoActive) cancelVisionAuto('手動搖桿接管', false);
       if(type === 'left'){ rc.thr=1000; rc.yaw=1500; setStick(el,0,1); syncStickMirrors('left',0,1,el); }
       else { rc.roll=1500; rc.pitch=1500; setStick(el,0,0); syncStickMirrors('right',0,0,el); }
       render(); markRcDirty();
-      sendLine(rcCoreLine()).then(ok=>{ if(ok){ lastRcSendAt = Date.now(); rcDirty = false; } });
+      sendCurrentRc();
     });
   }
 
@@ -1711,7 +1721,7 @@
 
   setInterval(()=>{
     // V4.6 不再固定每 100 ms 重送完全相同的 RC。
-    // 搖桿有變化時最快約 50 ms 更新；靜止時只每 500 ms keep-alive。
+    // 搖桿有變化時最快約 20 ms 更新；按下與放開時立即送一次，靜止時每 500 ms keep-alive。
     // micro:bit 仍會用最後一筆 RC 以約 4 ms 週期送給 nRF24L01。
     let now = 0;
     let revision = 0;
