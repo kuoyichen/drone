@@ -120,10 +120,6 @@
   .vision-tools button.stop{border-color:#c34c63;background:#661c2bdd;color:#ffe1e7}
   .vision-tools button.hidden{display:none}
   .vision-hint{position:absolute;left:50%;bottom:7px;transform:translateX(-50%);z-index:3;background:#020b1399;border:1px solid #315b7e88;border-radius:999px;padding:5px 10px;color:#d8efff;font-size:11px;pointer-events:none;white-space:nowrap}
-  .height-hold-btn{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:8;border:1px solid #6f9ac0;border-radius:12px;background:#092b47e8;color:#eaf4ff;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
-  .height-hold-btn.active{border-color:#52d39d;background:#0e4939ee;color:#caffea}
-  .height-hold-btn.pending{border-color:#d2ab54;background:#60491adf;color:#fff0ba}
-  .camera-stage .vision-hint{bottom:55px}
   .camera-joystick{z-index:7!important;width:min(clamp(134px,21.6vw,202px),calc(50% - 12px))!important;height:auto!important;aspect-ratio:1;top:auto!important;bottom:4%!important;opacity:.56;backdrop-filter:blur(1px);transition:opacity .15s;box-shadow:inset 0 0 28px #000a,0 8px 20px #0008!important}
   .camera-joystick:active{opacity:.78}
   .camera-joystick .stick{width:40%!important;height:40%!important;border-width:2px!important}
@@ -171,7 +167,6 @@
 
       <div id="cameraLeftJoystick" class="joystick camera-joystick camera-left-stick"><div class="stick"></div></div>
       <div id="cameraRightJoystick" class="joystick camera-joystick camera-right-stick"><div class="stick"></div></div>
-      <button id="cameraHeightHoldBtn" class="height-hold-btn" type="button" aria-pressed="false">保持定高</button>
       <div class="vision-hint">辨識 ArUco 後，點畫面設定目的地；手動碰任一搖桿會立即退出自動導航</div>
     </div>
   </div>
@@ -454,9 +449,6 @@
   let visionLastMarker = null;
   let visionLastSeenAt = 0;
   let visionLostNeutralized = false;
-  let heightHoldRequested = false;
-  let heightHoldActive = false;
-  let heightHoldThrottle = 1000;
 
   const $ = s => document.querySelector(s);
   const logEl = $('#log');
@@ -716,9 +708,6 @@
   }
 
   async function forceThrottleMinimum(reason, transmit = true){
-    heightHoldRequested = false;
-    heightHoldActive = false;
-    updateHeightHoldButton();
     rc.thr = 1000;
     markRcDirty();
     const left = $('#leftJoystick');
@@ -850,21 +839,6 @@
     pill.textContent = '光流定點：' + label;
     pill.classList.toggle('ok', tone === 'ok');
     pill.classList.toggle('warn', tone === 'warn');
-    if(heightHoldRequested && !heightHoldActive && tone === 'ok'){
-      heightHoldThrottle = rc.thr;
-      heightHoldActive = true;
-      log('sys', `保持定高：固定目前油門 ${heightHoldThrottle}，飛控將依現有定高迴路維持高度`);
-    }
-    updateHeightHoldButton();
-  }
-
-  function updateHeightHoldButton(){
-    const button = $('#cameraHeightHoldBtn');
-    if(!button) return;
-    button.classList.toggle('active', heightHoldActive);
-    button.classList.toggle('pending', heightHoldRequested && !heightHoldActive);
-    button.setAttribute('aria-pressed', String(heightHoldRequested));
-    button.textContent = heightHoldActive ? '保持定高：油門鎖定' : heightHoldRequested ? '保持定高：等待光流' : '保持定高';
   }
 
   function handleTelemetry(p,line){
@@ -975,10 +949,7 @@
 
   function connectedUI(on){
     bleConnected = !!on;
-    if(!bleConnected){
-      flowStatusAt.att=0; flowStatusAt.imu=0; flowStatusAt.pwr=0;
-      heightHoldRequested=false; heightHoldActive=false; updateHeightHoldButton();
-    }
+    if(!bleConnected){ flowStatusAt.att=0; flowStatusAt.imu=0; flowStatusAt.pwr=0; }
     $('#statusDot').classList.toggle('on', bleConnected);
     $('#serialStatus').textContent = bleConnected ? 'Bluetooth 已連線' : 'Bluetooth 未連線';
     $('#screenLink').textContent = bleConnected ? 'BLE' : 'OFF';
@@ -1274,19 +1245,11 @@
 
   function setAux(name){
     rc[name] = rc[name] >= 1500 ? 1000 : 2000;
-    if(name === 'aux1' && rc.aux1 >= 1700){
-      heightHoldRequested = false;
-      heightHoldActive = false;
-      updateHeightHoldButton();
-    }
     render();
     sendLine(auxCompactLine(name));
   }
 
   function resetControls(){
-    heightHoldRequested = false;
-    heightHoldActive = false;
-    updateHeightHoldButton();
     rc.thr = 1000; rc.yaw = 1500; rc.roll = 1500; rc.pitch = 1500;
     rc.aux1 = 1000;
     rc.aux2 = rc.aux3 = rc.aux4 = rc.aux5 = rc.aux6 = 1000;
@@ -1315,13 +1278,12 @@
       const mag = Math.hypot(dx,dy);
       if(mag > maxR){ dx = dx/mag*maxR; dy = dy/mag*maxR; }
       const x = clamp(dx/maxR,-1,1), y = clamp(dy/maxR,-1,1);
-      const controlY = type === 'left' && heightHoldActive ? clamp((1500-heightHoldThrottle)/500,-1,1) : y;
-      lastX = x; lastY = controlY;
-      setStick(el,x,controlY);
-      syncStickMirrors(type,x,controlY,el);
+      lastX = x; lastY = y;
+      setStick(el,x,y);
+      syncStickMirrors(type,x,y,el);
       if(type === 'left'){
         rc.yaw = ch(1500 + x*500);
-        rc.thr = heightHoldActive ? heightHoldThrottle : ch(1500 - y*500);
+        rc.thr = ch(1500 - y*500);
       }else{
         rc.roll = ch(1500 + x*500);
         rc.pitch = ch(1500 - y*500);
@@ -1687,12 +1649,6 @@
   makeJoystick($('#cameraRightJoystick'),'right');
 
   $('#cameraStartBtn').addEventListener('click',startVisionCamera);
-  $('#cameraHeightHoldBtn').addEventListener('click',e=>{
-    e.stopPropagation();
-    heightHoldRequested = !heightHoldRequested;
-    if(!heightHoldRequested) heightHoldActive = false;
-    renderFlowHoldStatus();
-  });
   $('#cameraFullscreenBtn').addEventListener('click',async ()=>{
     try{
       const stage = $('#cameraStage');
