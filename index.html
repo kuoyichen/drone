@@ -155,6 +155,7 @@
         <span id="arucoStatus" class="vision-pill">ArUco --</span>
         <span id="arucoAngles" class="vision-pill">R -- · P -- · Y --</span>
         <span id="visionNavStatus" class="vision-pill">MANUAL</span>
+        <span id="flowHoldStatus" class="vision-pill warn" title="依飛控遙測推定；現有韌體未直接回報光流控制接管旗標">光流定點：無法確認</span>
       </div>
       <div class="vision-tools">
         <button id="cameraStartBtn">啟動相機</button>
@@ -413,6 +414,7 @@
     barAlt:null, controlAlt:null, flowX:null, flowY:null, flowZ:null,
     flowQual:null, acc:[null,null,null], gyro:[null,null,null]
   };
+  const flowStatusAt = {att:0, imu:0, pwr:0};
 
   const rc = {
     thr: 1000, yaw: 1500, roll: 1500, pitch: 1500,
@@ -821,12 +823,31 @@
     drawAttitude();
   }
 
+  function renderFlowHoldStatus(){
+    const pill = $('#flowHoldStatus');
+    let label = '無法確認', tone = 'warn';
+    const now = Date.now();
+    if(!isBluetoothConnected()) label = '未連線';
+    else if(rc.aux1 >= 1700) label = '模式關閉';
+    else if(telemetry.armed !== 1) label = '未解鎖';
+    else if(now-flowStatusAt.att > 2500 || now-flowStatusAt.imu > 2500 || now-flowStatusAt.pwr > 2500) label = '遙測不足';
+    else if(telemetry.setFlags !== 0x21) label = '模式未生效';
+    else if(!(telemetry.sensorFlags & 0x40) || telemetry.flowQual < 25) label = '光流無效';
+    else if(telemetry.attAltRaw/100 <= 20 || telemetry.attAltRaw/100 >= 400) label = '高度超出範圍';
+    else if(Math.abs(ch(rc.roll+trimRoll)-1500) > 150 || Math.abs(ch(rc.pitch+trimPitch)-1500) > 150) label = '手動操控中';
+    else { label = '推定運作中'; tone = 'ok'; }
+    pill.textContent = '光流定點：' + label;
+    pill.classList.toggle('ok', tone === 'ok');
+    pill.classList.toggle('warn', tone === 'warn');
+  }
+
   function handleTelemetry(p,line){
     telemetryCount++;
     const type=p[1] || '';
     telemetryLog(line);
 
     if(type==='ATT' && p.length>=8){
+      flowStatusAt.att=Date.now();
       telemetry.roll=Number(p[2])/100;
       telemetry.pitch=Number(p[3])/100;
       telemetry.yaw=Number(p[4])/100;
@@ -835,10 +856,12 @@
       // p[7] 是原始 armed 值；按鈕與安全狀態改用 micro:bit
       // 連續確認後送出的 STATE,ARM，避免舊 ACK FIFO 造成假解鎖。
     }else if(type==='IMU' && p.length>=11){
+      flowStatusAt.imu=Date.now();
       telemetry.acc=[Number(p[2]),Number(p[3]),Number(p[4])];
       telemetry.gyro=[Number(p[5]),Number(p[6]),Number(p[7])];
       telemetry.flowX=Number(p[8]); telemetry.flowY=Number(p[9]); telemetry.flowQual=Number(p[10]);
     }else if(type==='PWR' && p.length>=8){
+      flowStatusAt.pwr=Date.now();
       telemetry.voltageRaw=Number(p[2]);
       telemetry.nrfSsi=Number(p[5]);
       telemetry.sensorFlags=Number(p[6]);
@@ -853,6 +876,7 @@
     }else if(telemetryConsoleVisible){
       renderTelemetry();
     }
+    renderFlowHoldStatus();
   }
 
   function setTelemetryConsoleVisible(show){
@@ -880,7 +904,8 @@
   }
 
   function currentSubscriptionMask(){
-    let mask = 0;
+    // 相機光流狀態需要模式、高度、感測器與光流品質；不依賴 Telemetry Console 是否顯示。
+    let mask = 0x01 | 0x02 | 0x10;
 
     // 姿態傳輸與 Telemetry Console 顯示分離。開啟時 micro:bit 才傳 TEL,ATT。
     if(attitudeStreamEnabled) mask |= 0x01;
@@ -924,6 +949,7 @@
 
   function connectedUI(on){
     bleConnected = !!on;
+    if(!bleConnected){ flowStatusAt.att=0; flowStatusAt.imu=0; flowStatusAt.pwr=0; }
     $('#statusDot').classList.toggle('on', bleConnected);
     $('#serialStatus').textContent = bleConnected ? 'Bluetooth 已連線' : 'Bluetooth 未連線';
     $('#screenLink').textContent = bleConnected ? 'BLE' : 'OFF';
@@ -1743,6 +1769,7 @@
       blePeriodicRcBusy = false;
     });
   },RC_ACTIVE_TICK_MS);
+  setInterval(renderFlowHoldStatus,500);
 
   window.addEventListener('load',()=>{
     setTelemetryConsoleVisible(false);
@@ -1755,6 +1782,7 @@
       setStick($('#cameraLeftJoystick'),0,1); setStick($('#cameraRightJoystick'),0,0);
     },50);
     render();
+    renderFlowHoldStatus();
     updatePairButton('idle');
     updateArmScreen();
     renderTelemetry();
